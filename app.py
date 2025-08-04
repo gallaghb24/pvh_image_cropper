@@ -6,8 +6,6 @@ from io import BytesIO
 import zipfile
 import numpy as np
 import cv2
-import base64
-from streamlit_drawable_canvas import st_canvas
 
 # --- Helper Functions ---
 def compute_crop(rec, img_w, img_h):
@@ -32,33 +30,14 @@ def compute_crop(rec, img_w, img_h):
             h = new_h
     return left, top, w, h
 
-
-def auto_custom_box(face_box, img_w, img_h, cw, ch):
-    # initial full-width crop to aspect
-    target = cw / ch
-    crop_h = int(img_w / target)
-    left = 0
-    w = img_w
-    top = max(0, (img_h - crop_h) // 2)
-    h = crop_h
-    # vertical nudge to include faces
-    if face_box:
-        if face_box['top'] < top:
-            top = face_box['top']
-        if face_box['bottom'] > top + h:
-            top = face_box['bottom'] - h
-        top = max(0, min(top, img_h - h))
-    return left, top, w, h
-
-# --- App Setup ---
+# --- Streamlit App ---
 st.set_page_config(page_title='CropPack Tester', layout='wide')
-st.title('CropPack Web App with Manual Cropping')
+st.title('CropPack Web App Prototype')
 
 # --- Sidebar Inputs ---
 st.sidebar.header('Inputs')
 json_file = st.sidebar.file_uploader('Upload CropPack JSON', type=['json'])
 image_file = st.sidebar.file_uploader('Upload Master Asset Image', type=['png','jpg','jpeg','tif','tiff'])
-st.sidebar.markdown('---')
 
 # --- Page Selection ---
 pages, doc_data = [], []
@@ -70,7 +49,7 @@ if json_file:
         st.sidebar.error(f'Invalid JSON: {e}')
 page = st.sidebar.selectbox('Select Page', pages) if pages else None
 
-# --- Output Sizes Mapping ---
+# --- Size Mapping Editor ---
 st.subheader('Output Sizes Mapping')
 size_mappings, custom_sizes = [], []
 if page and doc_data:
@@ -87,7 +66,6 @@ if page and doc_data:
     rows.append({'Template':'[CUSTOM]', 'Width_px':None, 'Height_px':None})
     df = pd.DataFrame(rows)
     edited = st.data_editor(df, hide_index=True, num_rows='dynamic', key='map_editor')
-    # build tasks
     for i, row in edited.iloc[:len(records)].iterrows():
         if pd.notna(row.Width_px) and pd.notna(row.Height_px):
             size_mappings.append((records[i], [int(row.Width_px), int(row.Height_px)], False))
@@ -97,8 +75,7 @@ if page and doc_data:
 else:
     st.info('Upload JSON and select a page to define sizes.')
 
-# --- Precompute Face Box ---
-face_box = None
+# --- Load Master Image & Detect Faces ---
 if image_file:
     img_orig = Image.open(image_file)
     img_w, img_h = img_orig.size
@@ -113,63 +90,59 @@ if image_file:
             'right': max(x+w for x,w in zip(xs,ws)),
             'bottom': max(y+h for y,h in zip(ys,hs))
         }
+    else:
+        face_box = None
+else:
+    face_box = None
 
-# --- Crop Generation ---
+# --- Crop Generation & Manual Adjust ---
 if (size_mappings or custom_sizes) and image_file:
     st.markdown('---')
     st.header(f'Crops for Page {page}')
     st.image(img_orig, caption='Master Asset', use_container_width=True)
     zip_buf = BytesIO()
     with zipfile.ZipFile(zip_buf, 'w') as zf:
-        # Template crops
+        # Automatic template crops
         for rec, out_size, _ in size_mappings:
             left, top, w, h = compute_crop(rec, img_w, img_h)
             crop = img_orig.crop((left, top, left+w, top+h)).resize(tuple(out_size), Image.LANCZOS)
             buf = BytesIO(); crop.save(buf, format='PNG'); buf.seek(0)
             zf.writestr(f"{rec['template']}_{out_size[0]}x{out_size[1]}.png", buf.getvalue())
-                                # Canvas-assisted custom crops
+
+        # Manual-adjust custom crops
+        st.subheader('Custom Crop Adjustments')
+        manual_settings = {}
         for cw, ch in custom_sizes:
-            st.subheader(f'Custom Crop: {cw}×{ch}')
-            init_l, init_t, init_w, init_h = auto_custom_box(face_box, img_w, img_h, cw, ch)
-            # prepare background as data URI
-            bg_buf = BytesIO()
-            img_orig.save(bg_buf, format='PNG')
-            b64 = base64.b64encode(bg_buf.getvalue()).decode()
-            bg_url = f"data:image/png;base64,{b64}"
-            # launch drawable canvas with correct indentation
-            canvas_data = st_canvas(
-                fill_color='',
-                stroke_width=2,
-                background_image_url=bg_url,
-                width=img_w,
-                height=img_h,
-                initial_drawing=[
-                    {'type':'rect','x':init_l,'y':init_t,'width':init_w,'height':init_h,'strokeColor':'#00FF00'}
-                ],
-                drawing_mode='transform'
-            )
-            if canvas_data.json_data and canvas_data.json_data.get('objects'):
-                obj = canvas_data.json_data['objects'][0]
-                l = int(obj['left']); t = int(obj['top'])
-                cw_box = int(obj['width']); ch_box = int(obj['height'])
-                final = img_orig.crop((l, t, l+cw_box, t+ch_box)).resize((cw, ch), Image.LANCZOS)
-                buf = BytesIO(); final.save(buf, format='PNG'); buf.seek(0)
-                zf.writestr(f'custom_{cw}x{ch}.png', buf.getvalue())
-                fill_color='', stroke_width=2,
-                background_image=bg_bytes,
-                width=img_w, height=img_h,
-                initial_drawing=[{'type':'rect','x':init_l,'y':init_t,'width':init_w,'height':init_h,'strokeColor':'#00FF00'}],
-                drawing_mode='transform'
-            )
-            if canvas_data.json_data and canvas_data.json_data.get('objects'):
-                obj = canvas_data.json_data['objects'][0]
-                l = int(obj['left']); t = int(obj['top'])
-                cw_box = int(obj['width']); ch_box = int(obj['height'])
-                final = img_orig.crop((l, t, l+cw_box, t+ch_box)).resize((cw, ch), Image.LANCZOS)
-                buf = BytesIO(); final.save(buf, format='PNG'); buf.seek(0)
-                zf.writestr(f'custom_{cw}x{ch}.png', buf.getvalue())
+            st.markdown(f'**Custom Size: {cw}×{ch}**')
+            # Initial window
+            init_left, init_top, init_w, init_h = 0, 0, img_w, img_h
+            target_ratio = cw/ch
+            # compute initial width-based crop
+            init_crop_h = int(init_w / target_ratio)
+            init_top = (img_h - init_crop_h)//2
+            init_h = init_crop_h
+            # sliders
+            max_shift_vert = img_h - init_h
+            shift_vert = st.slider(f'Vertical shift for {cw}×{ch}', -init_top, max_shift_vert - init_top, 0)
+            max_shift_horiz = img_w - init_w
+            shift_horiz = st.slider(f'Horizontal shift for {cw}×{ch}', -init_left, max_shift_horiz - init_left, 0)
+            # apply shifts
+            left = max(0, min(init_left + shift_horiz, img_w - init_w))
+            top  = max(0, min(init_top + shift_vert, img_h - init_h))
+            # preview
+            preview = img_orig.crop((left, top, left+init_w, top+init_h)).resize((200, int(200*init_h/init_w)), Image.LANCZOS)
+            st.image(preview, caption='Preview', use_container_width=False)
+            manual_settings[f'{cw}x{ch}'] = (left, top, init_w, init_h)
+
+        # Save manual crops
+        for key, (left, top, w, h) in manual_settings.items():
+            cw, ch = map(int, key.split('x'))
+            final = img_orig.crop((left, top, left+w, top+h)).resize((cw, ch), Image.LANCZOS)
+            buf = BytesIO(); final.save(buf, format='PNG'); buf.seek(0)
+            zf.writestr(f'custom_{key}.png', buf.getvalue())
+
     zip_buf.seek(0)
     st.download_button('Download All Crops', zip_buf.getvalue(), file_name=f'crops_page_{page}.zip', mime='application/zip')
 else:
     if page:
-        st.warning('Define sizes to generate crops.')
+        st.warning('Define sizes and upload an image to generate crops.')
