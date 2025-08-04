@@ -125,26 +125,33 @@ if custom_sizes:
             rec = min(records, key=lambda r: abs((cw/ch) - r.get('aspectRatio', r['frame']['w']/r['frame']['h'])))
             init_l, init_t, init_w, init_h = auto_custom_start(rec, img_w, img_h, cw, ch)
             # Horizontal slider
-            min_x = -init_l
-            max_x = img_w - init_l - init_w
-            if min_x <= max_x:
-                                                # calculate allowed horizontal shift range to avoid black borders
+                            # calculate allowed horizontal shift range to avoid black borders
                 min_x = -init_l
                 max_x = img_w - init_l - init_w
+                default_x = 0
+                if default_x < min_x:
+                    default_x = min_x
+                elif default_x > max_x:
+                    default_x = max_x
                 shift_x = st.number_input(
                     'Shift left/right (px)',
                     min_value=min_x, max_value=max_x,
-                    value=0,
+                    value=default_x,
                     step=1,
                     key=f'shiftx_{cw}_{ch}'
                 )
                 # calculate allowed vertical shift range to avoid black borders
                 min_y = -init_t
                 max_y = img_h - init_t - init_h
+                default_y = 0
+                if default_y < min_y:
+                    default_y = min_y
+                elif default_y > max_y:
+                    default_y = max_y
                 shift_y = st.number_input(
                     'Shift up/down (px)',
                     min_value=min_y, max_value=max_y,
-                    value=0,
+                    value=default_y,
                     step=1,
                     key=f'shifty_{cw}_{ch}'
                 )
@@ -153,6 +160,8 @@ if custom_sizes:
                 crop = crop.resize((cw, ch), Image.LANCZOS)
                 st.image(crop, caption=f'Preview {cw}×{ch}', use_container_width=True)
                 custom_shifts[(cw, ch)] = (shift_x, shift_y)
+
+        # --- Generate & Download ---[(cw, ch)] = (shift_x, shift_y)
 
         # --- Generate & Download ---[(cw, ch)] = (shift_x, shift_y)
 
