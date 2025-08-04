@@ -124,23 +124,36 @@ if (size_mappings or custom_sizes) and image_file:
                         nh = int(w/tgt)
                         top += (h-nh)//2; h=nh
 
-            # Custom: vertical-only nudge
-            if is_custom:
-                tgt = out_size[0]/out_size[1]
-                # center-crop to ratio
-                new_h = int(w/tgt)
-                top += (h-new_h)//2
-                h = new_h
-                # vertical shift to include faces
-                if face_box:
-                    if face_box["top"] < top:
-                        top = face_box["top"]
-                    if face_box["bottom"] > top+h:
-                        top = face_box["bottom"]-h
-                # apply human slider
-                top += vertical_shift
+                        # Custom: vertical-only nudge (adjust before final clamp)
+            if is_custom and face_box:
+                # calculate the crop height for ratio
+                target_ratio = out_size[0]/out_size[1]
+                crop_h = int(w / target_ratio)
+
+                # determine vertical center crop origin from original frame
+                base_top = top + (h - crop_h)//2
+
+                # nudge vertically to include all faces
+                if face_box["top"] < base_top:
+                    base_top = face_box["top"]
+                if face_box["bottom"] > base_top + crop_h:
+                    base_top = face_box["bottom"] - crop_h
+
+                # apply human slider on nudged position
+                base_top += vertical_shift
+
+                # clamp
+                base_top = max(0, min(base_top, img_h - crop_h))
+
+                # update crop window
+                top = base_top
+                h = crop_h
 
             # clamp & finalize
+            left = max(0, min(left, img_w - w))
+            top = max(0, min(top, img_h - h))
+            crop = img_orig.crop((left, top, left + w, top + h))
+
             left = max(0, min(left, img_w-w))
             top = max(0, min(top, img_h-h))
             crop = img_orig.crop((left, top, left+w, top+h))
