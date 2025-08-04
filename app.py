@@ -60,7 +60,7 @@ st.markdown("""
 st.title("Smart Crop Automation Prototype")
 
 # ——————————————————————————————————————————————————————————
-# Sidebar Inputs + Custom Sizes
+# Sidebar Inputs + Custom Crops
 # ——————————————————————————————————————————————————————————
 st.sidebar.header("Inputs")
 json_file  = st.sidebar.file_uploader("Upload Cropping Guidelines JSON", type="json")
@@ -68,7 +68,7 @@ image_file = st.sidebar.file_uploader("Upload Master Asset Image",
     type=["png","jpg","jpeg","tif","tiff"]
 )
 
-with st.sidebar.expander("⚙️ Custom Output Sizes", expanded=True):
+with st.sidebar.expander("⚙️ Custom Crops", expanded=True):
     st.markdown("Add extra output dimensions here:")
     custom_df = st.data_editor(
         pd.DataFrame([{"Width_px": None, "Height_px": None}]),
@@ -106,21 +106,25 @@ if records:
         if not (abs(r["imageOffset"]["x"])<1e-6 and abs(r["imageOffset"]["y"])<1e-6)
     ]
 
-    # Available Crops with checkboxes
+    # Always show all guideline crops in a table
     st.subheader("Available Crops from Guidelines")
-    to_include = []
+    guideline_rows = []
     for rec in guidelines:
         w_pt, h_pt = rec["frame"]["w"], rec["frame"]["h"]
         ex, ey      = rec["effectivePpi"]["x"], rec["effectivePpi"]["y"]
         w_px = int(w_pt * ex / 72)
         h_px = int(h_pt * ey / 72)
-        tpl  = rec["template"]
-        label = f"{tpl} ({w_px}×{h_px}, AR {round(w_px/h_px,2)})"
-        if st.checkbox(label, value=True, key=f"chk_{tpl}"):
-            to_include.append(tpl)
+        guideline_rows.append({
+            "Template": rec["template"],
+            "Width_px": w_px,
+            "Height_px": h_px,
+            "Aspect Ratio": round(w_px/h_px, 2)
+        })
+    df_guidelines = pd.DataFrame(guideline_rows)
+    st.dataframe(df_guidelines, use_container_width=True)
 
-    # Custom Outputs table
-    st.subheader("Custom Output Sizes")
+    # Custom Crops table
+    st.subheader("Custom Crops")
     custom_rows = []
     for w, h in custom_sizes:
         ar = round(w/h, 2)
@@ -155,14 +159,13 @@ if records:
             "bottom": max(y+h for y,h in zip(ys,hs))
         }
 
-    # Manual adjust tabs for custom
+    # Manual adjustments for custom
     custom_shifts = {}
     if custom_sizes:
         st.subheader("Adjust Custom Crops")
         tabs = st.tabs([f"{w}×{h}" for w,h in custom_sizes])
         for i, ((cw, ch), tab) in enumerate(zip(custom_sizes, tabs)):
             with tab:
-                # starting crop based on closest template
                 rec = min(
                     records,
                     key=lambda r: abs((cw/ch) - r["frame"]["w"]/r["frame"]["h"])
@@ -177,7 +180,7 @@ if records:
                     "Shift left/right", min_x, max_x, 0, key=f"shx_{i}"
                 )
                 shift_y = 0 if min_y==max_y else st.slider(
-                    "Shift up/down",    min_y, max_y, 0, key=f"shy_{i}"
+                    "Shift up/down", min_y, max_y, 0, key=f"shy_{i}"
                 )
 
                 x0, y0 = left+shift_x, top+shift_y
@@ -189,18 +192,17 @@ if records:
     # Generate & Download
     zip_buf = BytesIO()
     with zipfile.ZipFile(zip_buf, "w") as zf:
-        # guideline crops
+        # Crop Guidelines folder
         for rec in guidelines:
-            if rec["template"] in to_include:
-                out_w = int(rec["frame"]["w"] * rec["effectivePpi"]["x"] / 72)
-                out_h = int(rec["frame"]["h"] * rec["effectivePpi"]["y"] / 72)
-                l, t, w_box, h_box = compute_crop(rec, img_w, img_h)
-                crop = img_orig.crop((l, t, l+w_box, t+h_box)) \
-                                .resize((out_w, out_h), Image.LANCZOS)
-                buf = BytesIO(); crop.save(buf, format="PNG"); buf.seek(0)
-                zf.writestr(f"{rec['template']}_{out_w}x{out_h}.png", buf.getvalue())
+            out_w = int(rec["frame"]["w"] * rec["effectivePpi"]["x"] / 72)
+            out_h = int(rec["frame"]["h"] * rec["effectivePpi"]["y"] / 72)
+            l, t, w_box, h_box = compute_crop(rec, img_w, img_h)
+            crop = img_orig.crop((l, t, l+w_box, t+h_box)) \
+                            .resize((out_w, out_h), Image.LANCZOS)
+            buf = BytesIO(); crop.save(buf, format="PNG"); buf.seek(0)
+            zf.writestr(f"Crop Guidelines/{rec['template']}_{out_w}x{out_h}.png", buf.getvalue())
 
-        # custom crops
+        # Custom Crops folder
         for cw, ch in custom_sizes:
             tpl = f"custom_{cw}x{ch}"
             rec = min(
@@ -214,7 +216,7 @@ if records:
             crop = img_orig.crop((l, t, l+w_box, t+h_box)) \
                             .resize((cw, ch), Image.LANCZOS)
             buf = BytesIO(); crop.save(buf, format="PNG"); buf.seek(0)
-            zf.writestr(f"{tpl}.png", buf.getvalue())
+            zf.writestr(f"Custom Crops/{tpl}.png", buf.getvalue())
 
     zip_buf.seek(0)
     st.download_button(
