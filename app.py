@@ -11,39 +11,39 @@ import cv2
 # ——————————————————————————————————————————————————————————
 
 def compute_crop(rec, img_w, img_h):
-    """Calculate the (left, top, width, height) crop box in pixel space
-    from the guideline record.* Keeps the aspect-ratio defined by the
-    guideline frame.*"""
+    """Return (left, top, width, height) crop rectangle (px) honouring the
+    guideline frame's aspect ratio."""
     off = rec["imageOffset"]
     fr = rec["frame"]
-
     fx, fy = abs(off["x"]), abs(off["y"])
     fw, fh = off["w"], off["h"]
+
     left = int((fx / fw) * img_w)
     top = int((fy / fh) * img_h)
     w = int((fr["w"] / fw) * img_w)
     h = int((fr["h"] / fh) * img_h)
 
-    # fine-tune to perfect aspect ratio
-    target = fr["w"] / fr["h"]
-    current = w / h if h else target
-    if abs(current - target) > 1e-3:
-        if current > target:  # too wide – trim width
-            new_w = int(h * target)
+    target_ar = fr["w"] / fr["h"]
+    current_ar = w / h if h else target_ar
+
+    if abs(current_ar - target_ar) > 1e-3:
+        if current_ar > target_ar:  # too wide, trim horizontally
+            new_w = int(h * target_ar)
             left += (w - new_w) // 2
             w = new_w
-        else:                 # too tall – trim height
-            new_h = int(w / target)
+        else:  # too tall, trim vertically
+            new_h = int(w / target_ar)
             top += (h - new_h) // 2
             h = new_h
+
     return left, top, w, h
 
+
 def auto_custom_start(rec, img_w, img_h, cw, ch):
-    """Return a starting crop box for a custom size based on the closest
-    guideline record"""
+    """Take the closest‑AR guideline crop and centre‑trim to the custom AR."""
     left, top, w, h = compute_crop(rec, img_w, img_h)
-    tgt = cw / ch
-    new_h = int(w / tgt)
+    tgt_ar = cw / ch
+    new_h = int(w / tgt_ar)
     top += (h - new_h) // 2
     return left, top, w, new_h
 
@@ -57,14 +57,11 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# fix sidebar width
+# Sidebar width in pixels
 st.markdown(
     """
     <style>
-      [data-testid="stSidebar"] {
-        min-width: 450px !important;
-        max-width: 450px !important;
-      }
+      [data-testid="stSidebar"] {min-width: 450px !important; max-width: 450px !important;}
     </style>
     """,
     unsafe_allow_html=True,
@@ -97,10 +94,10 @@ with st.sidebar.expander("⚙️ Custom Crops", expanded=True):
     ]
 
 # ——————————————————————————————————————————————————————————
-# Load & match JSON → records
+# Load JSON and match records
 # ——————————————————————————————————————————————————————————
 
-records = []
+records: list[dict] = []
 if json_file and image_file:
     data = json.load(json_file)
     fname = image_file.name
@@ -114,164 +111,125 @@ else:
     st.sidebar.info("Upload both JSON & image to begin.")
 
 # ——————————————————————————————————————————————————————————
-# Main
+# Main section
 # ——————————————————————————————————————————————————————————
 
 if records:
-    # Exclude master (zero-offset)
+
     guidelines = [
-        r
-        for r in records
-        if not (abs(r["imageOffset"]["x"]) < 1e-6 and abs(r["imageOffset"]["y"]) < 1e-6)
+        r for r in records if not (abs(r["imageOffset"]["x"]) < 1e-6 and abs(r["imageOffset"]["y"]) < 1e-6)
     ]
 
-    # Available Crops table
+    # Guideline crops table
     st.subheader("Available Crops from Guidelines")
-    rows = []
+    g_rows = []
     for rec in guidelines:
         w_pt, h_pt = rec["frame"]["w"], rec["frame"]["h"]
         ex, ey = rec["effectivePpi"]["x"], rec["effectivePpi"]["y"]
         w_px = int(w_pt * ex / 72)
         h_px = int(h_pt * ey / 72)
-        rows.append(
-            {
-                "Template": rec["template"],
-                "Width_px": w_px,
-                "Height_px": h_px,
-                "Aspect Ratio": round(w_px / h_px, 2),
-            }
-        )
-    df_guidelines = pd.DataFrame(rows)
-    st.dataframe(df_guidelines, use_container_width=True)
+        g_rows.append({
+            "Template": rec["template"],
+            "Width_px": w_px,
+            "Height_px": h_px,
+            "Aspect Ratio": round(w_px / h_px, 2),
+        })
+    st.dataframe(pd.DataFrame(g_rows), use_container_width=True)
 
-    # Custom Crops table
+    # Custom crops table
     st.subheader("Custom Crops")
-    custom_rows = []
-    for w, h in custom_sizes:
-        ar = round(w / h, 2)
-        base = min(records, key=lambda r: abs((w / h) - r["frame"]["w"] / r["frame"]["h"]))[
-            "template"
-        ]
-        custom_rows.append(
-            {
-                "Template": f"{base} Custom {w}×{h}",
-                "Width_px": w,
-                "Height_px": h,
-                "Aspect Ratio": ar,
-            }
-        )
-    df_custom = pd.DataFrame(custom_rows)
-    st.dataframe(df_custom, use_container_width=True)
+    c_rows = []
+    for cw, ch in custom_sizes:
+        closest = min(records, key=lambda r: abs((cw / ch) - r["frame"]["w"] / r["frame"]["h"]))
+        c_rows.append({
+            "Template": f"{closest['template']} Custom {cw}×{ch}",
+            "Width_px": cw,
+            "Height_px": ch,
+            "Aspect Ratio": round(cw / ch, 2),
+        })
+    st.dataframe(pd.DataFrame(c_rows), use_container_width=True)
 
-    # Prepare image & detect face (future use)
+    # Load master image
     img_orig = Image.open(image_file)
     img_w, img_h = img_orig.size
 
-    np_img = np.array(img_orig)
-    gray = cv2.cvtColor(np_img, cv2.COLOR_BGR2GRAY)
-    casc = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
-    dets = casc.detectMultiScale(gray, 1.1, 5, minSize=(30, 30))
-    face_box = None
-    if len(dets) > 0:
-        xs, ys, ws, hs = zip(*dets)
-        face_box = {
-            "left": min(xs),
-            "top": min(ys),
-            "right": max(x + w for x, w in zip(xs, ws)),
-            "bottom": max(y + h for y, h in zip(ys, hs)),
-        }
+    # ————————————————————————————————————————————————
+    # Custom crop adjust‑and‑preview UI
+    # ————————————————————————————————————————————————
 
-    # Manual Adjust for Custom with zoom±10% and width/height offset
     custom_shifts = {}
     if custom_sizes:
         st.subheader("Adjust Custom Crops")
         tabs = st.tabs([f"{w}×{h}" for w, h in custom_sizes])
+
         for i, ((cw, ch), tab) in enumerate(zip(custom_sizes, tabs)):
             with tab:
-                # closest guideline for aspect ratio anchoring
-                rec = min(records, key=lambda r: abs((cw / ch) - r["frame"]["w"] / r["frame"]["h"]))
-                left, top, wb, hb = auto_custom_start(rec, img_w, img_h, cw, ch)
+                base_rec = min(records, key=lambda r: abs((cw / ch) - r["frame"]["w"] / r["frame"]["h"]))
+                left, top, wb, hb = auto_custom_start(base_rec, img_w, img_h, cw, ch)
 
-                # ————— Zoom controls —————
-                zkey = f"zoom_delta_{i}"
-                if zkey not in st.session_state:
-                    st.session_state[zkey] = 0  # 0% (i.e. 100% scale)
+                # —— ZOOM (±10 %) ——
+                z_delta_key = f"zoom_delta_{i}"
+                st.session_state.setdefault(z_delta_key, 0)
 
-                col1, col2 = st.columns([3, 1])
-                with col1:
-                    delta = st.slider(
-                        "Zoom (±10%)",
-                        -10,
-                        10,
-                        st.session_state[zkey],
-                        step=1,
-                        key=f"szoom_{i}",
-                    )
-                with col2:
-                    delta = st.number_input(
-                        "",
-                        min_value=-10,
-                        max_value=10,
-                        value=delta,
-                        step=1,
-                        key=f"nzoom_{i}",
-                    )
-                st.session_state[zkey] = delta
-                zoom = 1 + (delta / 100)  # 0.90 → 1.10
+                col_zoom_slider, col_zoom_num = st.columns([3, 1])
+                with col_zoom_slider:
+                    z_delta = st.slider("Zoom (±10%)", -10, 10, st.session_state[z_delta_key], 1, key=f"szoom_{i}")
+                with col_zoom_num:
+                    z_delta = st.number_input("", -10, 10, z_delta, 1, key=f"nzoom_{i}")
+                st.session_state[z_delta_key] = z_delta
+                zoom = 1 + (z_delta / 100)
 
-                # dimensions after zoom
+                # dimensions after zoom applied
                 wz = int(wb / zoom)
                 hz = int(hb / zoom)
                 cx, cy = left + wb // 2, top + hb // 2
-                left2 = cx - wz // 2
-                top2 = cy - hz // 2
 
-                # ————— Offset controls —————
-                sxkey = f"sx_{i}"
-                sykey = f"sy_{i}"
+                left_start = cx - wz // 2
+                top_start = cy - hz // 2
 
-                # allowable range so crop remains inside image
-                min_x = int(max(-left2, -(cx - wz // 2)))
-                max_x = int(min(img_w - left2 - wz, (img_w - wz) - left2))
-                min_y = int(max(-top2, -(cy - hz // 2)))
-                max_y = int(min(img_h - top2 - hz, (img_h - hz) - top2))
+                # allowable offset ranges (keep crop inside image)
+                min_x = -left_start
+                max_x = img_w - left_start - wz
+                min_y = -top_start
+                max_y = img_h - top_start - hz
 
-                col3, col4 = st.columns([3, 1])
-                with col3:
-                    sx = (
-                        0
-                        if min_x == max_x
-                        else st.slider(
-                            "Width Offset",
-                            min_x,
-                            max_x,
-                            0,
-                            step=1,
-                            key=sxkey,
-                        )
-                    )
-                with col4:
-                    sy = st.number_input(
-                        "Height Offset",
-                        min_value=min_y,
-                        max_value=max_y,
-                        value=0,
-                        step=1,
-                        key=sykey,
-                    )
+                # —— WIDTH OFFSET ——
+                sx_key = f"sx_{i}"
+                st.session_state.setdefault(sx_key, 0)
+                col_w_slider, col_w_num = st.columns([3, 1])
+                with col_w_slider:
+                    sx = 0 if min_x == max_x else st.slider("Width Offset", min_x, max_x, st.session_state[sx_key], 1, key=f"sw_{i}")
+                with col_w_num:
+                    sx = st.number_input("", min_x, max_x, sx, 1, key=f"nw_{i}")
+                st.session_state[sx_key] = sx
 
-                # preview
-                x0, y0 = left2 + sx, top2 + sy
-                preview = (
-                    img_orig.crop((x0, y0, x0 + wz, y0 + hz))
-                    .resize((cw, ch), Image.LANCZOS)
-                )
+                # —— HEIGHT OFFSET (slider appears when adjustable) ——
+                sy_key = f"sy_{i}"
+                st.session_state.setdefault(sy_key, 0)
+                col_h_slider, col_h_num = st.columns([3, 1])
+                if min_y == max_y:
+                    # no room – keep numeric input locked at 0
+                    with col_h_slider:
+                        st.markdown("<div style='height:35px'></div>", unsafe_allow_html=True)
+                    with col_h_num:
+                        sy = st.number_input("Height Offset", value=0, disabled=True, key=f"nh_{i}")
+                else:
+                    with col_h_slider:
+                        sy = st.slider("Height Offset", min_y, max_y, st.session_state[sy_key], 1, key=f"sh_{i}")
+                    with col_h_num:
+                        sy = st.number_input("", min_y, max_y, sy, 1, key=f"nh_{i}")
+                st.session_state[sy_key] = sy
+
+                # preview crop
+                x0 = left_start + sx
+                y0 = top_start + sy
+                preview = img_orig.crop((x0, y0, x0 + wz, y0 + hz)).resize((cw, ch), Image.LANCZOS)
                 st.image(preview, caption=f"Preview {cw}×{ch}", width=600)
 
                 custom_shifts[(cw, ch)] = (sx, sy, zoom)
 
     # ——————————————————————————————————————————————————————————
-    # Generate & Download ZIP with folders
+    # Generate ZIP
     # ——————————————————————————————————————————————————————————
 
     zip_buf = BytesIO()
@@ -281,43 +239,18 @@ if records:
             out_w = int(rec["frame"]["w"] * rec["effectivePpi"]["x"] / 72)
             out_h = int(rec["frame"]["h"] * rec["effectivePpi"]["y"] / 72)
             l, t, wb, hb = compute_crop(rec, img_w, img_h)
-            crop = (
-                img_orig.crop((l, t, l + wb, t + hb))
-                .resize((out_w, out_h), Image.LANCZOS)
-            )
-            buf = BytesIO()
-            crop.save(buf, format="PNG")
-            buf.seek(0)
-            zf.writestr(
-                f"Crop Guidelines/{rec['template']}_{out_w}x{out_h}.png", buf.getvalue()
-            )
+            crop = img_orig.crop((l, t, l + wb, t + hb)).resize((out_w, out_h), Image.LANCZOS)
+            buf = BytesIO(); crop.save(buf, format="PNG"); buf.seek(0)
+            zf.writestr(f"Crop Guidelines/{rec['template']}_{out_w}x{out_h}.png", buf.getvalue())
 
         # custom crops
         for cw, ch in custom_sizes:
-            tpl = f"custom_{cw}x{ch}"
-            rec = min(records, key=lambda r: abs((cw / ch) - r["frame"]["w"] / r["frame"]["h"]))
-            l, t, wb, hb = auto_custom_start(rec, img_w, img_h, cw, ch)
+            l, t, wb, hb = auto_custom_start(
+                min(records, key=lambda r: abs((cw / ch) - r["frame"]["w"] / r["frame"]["h"])),
+                img_w, img_h, cw, ch,
+            )
             sx, sy, zoom = custom_shifts.get((cw, ch), (0, 0, 1))
             wz = int(wb / zoom)
             hz = int(hb / zoom)
             cx, cy = l + wb // 2, t + hb // 2
-            l2 = max(0, min(cx - wz // 2 + sx, img_w - wz))
-            t2 = max(0, min(cy - hz // 2 + sy, img_h - hz))
-            crop = (
-                img_orig.crop((l2, t2, l2 + wz, t2 + hz))
-                .resize((cw, ch), Image.LANCZOS)
-            )
-            buf = BytesIO()
-            crop.save(buf, format="PNG")
-            buf.seek(0)
-            zf.writestr(f"Custom Crops/{tpl}.png", buf.getvalue())
-
-    zip_buf.seek(0)
-    st.download_button(
-        "📥 Download All Crops",
-        zip_buf.getvalue(),
-        file_name=f"crops_{image_file.name}.zip",
-        mime="application/zip",
-    )
-else:
-    st.info("Upload JSON + image to see Output Sizes.")
+            l2 = max(0, min(cx - wz // 2 + sx
