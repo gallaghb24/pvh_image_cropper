@@ -127,15 +127,23 @@ if (size_mappings or custom_sizes) and image_file:
             buf = BytesIO(); crop.save(buf, format='PNG'); buf.seek(0)
             zf.writestr(f"{rec['template']}_{out_size[0]}x{out_size[1]}.png", buf.getvalue())
         # custom crops via canvas
-        for cw, ch in custom_sizes:
+                for cw, ch in custom_sizes:
             st.subheader(f'Custom Crop: {cw}×{ch}')
+            # Prepare initial rectangle via auto_custom_box
             init_l, init_t, init_w, init_h = auto_custom_box(face_box, img_w, img_h, cw, ch)
+            # Convert master image to bytes for canvas background
+            bg_buf = BytesIO()
+            img_orig.save(bg_buf, format='PNG')
+            bg_bytes = bg_buf.getvalue()
+            # Launch drawable canvas
             canvas_data = st_canvas(
                 fill_color='', stroke_width=2,
-                background_image=img_orig, width=img_w, height=img_h,
+                background_image=bg_bytes,
+                width=img_w, height=img_h,
                 initial_drawing=[{'type':'rect','x':init_l,'y':init_t,'width':init_w,'height':init_h,'strokeColor':'#00FF00'}],
                 drawing_mode='transform'
             )
+            # After user adjust
             if canvas_data.json_data and canvas_data.json_data.get('objects'):
                 obj = canvas_data.json_data['objects'][0]
                 l = int(obj['left']); t = int(obj['top'])
