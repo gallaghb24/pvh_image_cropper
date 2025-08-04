@@ -37,12 +37,13 @@ custom_sizes = []
 records = []
 
 if page is not None and doc_data and image_file:
-    # Load and process master asset
+    # Filter records for selected page
+    records = [r for r in doc_data if r["page"] == page]
+
+    # Load master asset and detect faces
     img = Image.open(image_file)
     img_w, img_h = img.size
     np_img = np.array(img)
-
-    # Haar cascade face detection
     gray = cv2.cvtColor(np_img, cv2.COLOR_BGR2GRAY)
     face_cascade = cv2.CascadeClassifier(
         cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
@@ -50,31 +51,18 @@ if page is not None and doc_data and image_file:
     detections = face_cascade.detectMultiScale(
         gray, scaleFactor=1.1, minNeighbors=5, minSize=(30,30)
     )
-    if len(detections):
+    if len(detections) > 0:
         xs, ys, ws, hs = zip(*detections)
         face_box = {
-            "left":   int(min(xs)),
-            "top":    int(min(ys)),
-            "right":  int(max(x + w for x, w in zip(xs, ws))),
-            "bottom": int(max(y + h for y, h in zip(ys, hs)))
+            "left": int(min(xs)),
+            "top": int(min(ys)),
+            "right": int(max(x+w for x,w in zip(xs,ws))),
+            "bottom": int(max(y+h for y,h in zip(ys,hs)))
         }
     else:
         face_box = None
 
-    # Saliency detection
-    sal = cv2.saliency.StaticSaliencySpectralResidual_create()
-    _, salmap = sal.computeSaliency(np_img)
-    salmap = (salmap * 255).astype(np.uint8)
-    _, mask = cv2.threshold(salmap, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
-    cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    if cnts:
-        x, y, w_s, h_s = max(cnts, key=lambda c: cv2.contourArea(c)).squeeze().tolist()
-        sal_box = {"left": x, "top": y, "right": x+w_s, "bottom": y+h_s}
-    else:
-        sal_box = None
-
-    # Filter records and build size table
-    records = [r for r in doc_data if r["page"] == page]
+    # Build size mapping table
     df_rows = []
     for rec in records:
         w_pt = rec["frame"]["w"]
@@ -85,12 +73,13 @@ if page is not None and doc_data and image_file:
         h_px = int(h_pt * eff_y / 72)
         df_rows.append({
             "Template": rec["template"],
-            "Width_pt": w_pt, "Height_pt": h_pt,
-            "Width_px": w_px, "Height_px": h_px,
+            "Width_pt": w_pt,
+            "Height_pt": h_pt,
+            "Width_px": w_px,
+            "Height_px": h_px,
             "Aspect": rec.get("aspectRatio")
         })
-    df_rows.append({"Template":"[CUSTOM]","Width_pt":None,"Height_pt":None,
-                    "Width_px":None,"Height_px":None,"Aspect":None})
+    df_rows.append({"Template":"[CUSTOM]","Width_pt":None,"Height_pt":None,"Width_px":None,"Height_px":None,"Aspect":None})
     df_sizes = pd.DataFrame(df_rows)
     edited = st.data_editor(
         df_sizes,
@@ -106,6 +95,7 @@ if page is not None and doc_data and image_file:
         key="size_editor",
         num_rows="dynamic"
     )
+
     # Map rows to crop tasks
     for idx, row in edited.iloc[:len(records)].iterrows():
         w = row["Width_px"]
@@ -130,55 +120,52 @@ if size_mappings or custom_sizes:
         for cw,ch in custom_sizes:
             target_r = cw/ch
             best = min(records, key=lambda r: abs(r["aspectRatio"]-target_r))
-            tasks.append((best, [cw,ch], True))
+            tasks.append((best,[cw,ch],True))
         for rec,out_size,is_custom in tasks:
+            img_offset = rec["imageOffset"]
+            frame = rec["frame"]
+            disp_w = img_offset["w"]; disp_h=img_offset["h"]
+            off_x = abs(img_offset["x"]); off_y = abs(img_offset["y"])
+            frac_x=off_x/disp_w; frac_y=off_y/disp_h
+            frac_w=frame["w"]/disp_w; frac_h=frame["h"]/disp_h
             img = Image.open(image_file)
             img_w, img_h = img.size
-            offset = rec["imageOffset"]
-            frame = rec["frame"]
-            disp_w, disp_h = offset["w"], offset["h"]
-            off_x, off_y = abs(offset["x"]), abs(offset["y"])
-            frac_x, frac_y = off_x/disp_w, off_y/disp_h
-            frac_w, frac_h = frame["w"]/disp_w, frame["h"]/disp_h
             left = int(frac_x*img_w); top = int(frac_y*img_h)
             w = int(frac_w*img_w); h = int(frac_h*img_h)
             target_ratio = out_size[0]/out_size[1]
             current_ratio = w/h if h else target_ratio
+
+            # exact templates
             if not is_custom and abs(current_ratio-target_ratio)>1e-3:
                 if current_ratio>target_ratio:
-                    new_w = int(h*target_ratio); left += (w-new_w)//2; w=new_w
+                    new_w=int(h*target_ratio); left+=(w-new_w)//2; w=new_w
                 else:
-                    new_h = int(w/target_ratio); top += (h-new_h)//2; h=new_h
+                    new_h=int(w/target_ratio); top+=(h-new_h)//2; h=new_h
+
+            # custom: center + nudge faces
             if is_custom:
-                new_w, new_h = w, h
-                # center
+                new_w,new_h=w,h
                 xc, yc = left+w//2, top+h//2
                 left, top = max(0,xc-new_w//2), max(0,yc-new_h//2)
-                # include faces
                 if face_box:
                     if face_box["left"]<left: left=face_box["left"]
                     if face_box["right"]>left+new_w: left=face_box["right"]-new_w
                     if face_box["top"]<top: top=face_box["top"]
                     if face_box["bottom"]>top+new_h: top=face_box["bottom"]-new_h
-                # include saliency
-                if sal_box:
-                    if sal_box["left"]<left: left=sal_box["left"]
-                    if sal_box["right"]>left+new_w: left=sal_box["right"]-new_w
-                    if sal_box["top"]<top: top=sal_box["top"]
-                    if sal_box["bottom"]>top+new_h: top=sal_box["bottom"]-new_h
                 # clamp
-                left = max(0,min(left,img_w-new_w)); top = max(0,min(top,img_h-new_h))
-                w, h = new_w, new_h
-            # final clamp & crop
-            left = max(0,min(left,img_w-1)); top = max(0,min(top,img_h-1))
-            w = max(1,min(w,img_w-left)); h = max(1,min(h,img_h-top))
-            crop = img.crop((left,top,left+w,top+h))
-            crop = crop.resize(tuple(out_size),Image.LANCZOS)
-            buf = BytesIO(); crop.save(buf,format="PNG"); buf.seek(0)
-            fname = f"{rec['template']}_{out_size[0]}x{out_size[1]}.png"
+                left=max(0,min(left,img_w-new_w)); top=max(0,min(top,img_h-new_h))
+                w,h=new_w,new_h
+
+            # clamp & crop
+            left=max(0,min(left,img_w-1)); top=max(0,min(top,img_h-1))
+            w=max(1,min(w,img_w-left)); h=max(1,min(h,img_h-top))
+            crop=img.crop((left,top,left+w,top+h))
+            crop=crop.resize(tuple(out_size),Image.LANCZOS)
+            buf=BytesIO(); crop.save(buf,format="PNG"); buf.seek(0)
+            fname=f"{rec['template']}_{out_size[0]}x{out_size[1]}.png"
             zf.writestr(fname,buf.getvalue())
     zip_buffer.seek(0)
-    st.download_button("Download Crops", zip_buffer.getvalue(), file_name=f"page_{page}_crops.zip", mime="application/zip")
+    st.download_button("Download Crops",zip_buffer.getvalue(),file_name=f"page_{page}_crops.zip",mime="application/zip")
 else:
     if page is not None:
         st.warning("Define at least one size and upload an image to generate crops.")
