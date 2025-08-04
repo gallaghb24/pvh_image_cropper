@@ -34,11 +34,10 @@ st.subheader("Output Sizes Mapping")
 size_mappings, custom_sizes, records = [], [], []
 if page is not None and doc_data:
     records = [r for r in doc_data if r["page"] == page]
-    df_sizes = pd.DataFrame(
-        [{"Template": r["template"], "Width": r["frame"]["w"], "Height": r["frame"]["h"]} 
-         for r in records]
-        + [{"Template": "[CUSTOM]", "Width": None, "Height": None}]
-    )
+    df_sizes = pd.DataFrame([
+        {"Template": r["template"], "Width": r["frame"]["w"], "Height": r["frame"]["h"]}
+        for r in records
+    ] + [{"Template": "[CUSTOM]", "Width": None, "Height": None}])
     edited = st.data_editor(df_sizes, key="size_editor", num_rows="dynamic")
     for _, row in edited.iterrows():
         tpl, w, h = row["Template"], row["Width"], row["Height"]
@@ -57,13 +56,12 @@ if page is not None and image_file and (size_mappings or custom_sizes):
     img = Image.open(image_file)
     img_w, img_h = img.size
 
+    # Prepare crop tasks
     crops_to_generate = []
-    # exact
     for rec in records:
         for m in size_mappings:
             if m["template"] == rec["template"]:
                 crops_to_generate.append((rec, m["size"], False))
-    # custom
     for cw, ch in custom_sizes:
         target_r = cw / ch
         best = min(
@@ -75,31 +73,24 @@ if page is not None and image_file and (size_mappings or custom_sizes):
     zip_buffer = BytesIO()
     with zipfile.ZipFile(zip_buffer, "w") as zf:
         for rec, out_size, is_custom in crops_to_generate:
-            # 1) Undo InDesign zoom (scale)
-            sx = rec["scaleX"] / 100.0
-            sy = rec["scaleY"] / 100.0
+            # Convert InDesign pts -> pixels using effective PPI
+            ox_pt = rec["imageOffset"]["x"]
+            oy_pt = rec["imageOffset"]["y"]
+            ow_pt = rec["imageOffset"]["w"]
+            oh_pt = rec["imageOffset"]["h"]
+            eff_x = rec["effectivePpi"]["x"]
+            eff_y = rec["effectivePpi"]["y"]
+            ox_px = int(ox_pt * eff_x / 72)
+            oy_px = int(oy_pt * eff_y / 72)
+            ow_px = int(ow_pt * eff_x / 72)
+            oh_px = int(oh_pt * eff_y / 72)
 
-            # 2) Convert offset pts → original-image pts
-            ox_pts = rec["imageOffset"]["x"] / sx
-            oy_pts = rec["imageOffset"]["y"] / sy
-            ow_pts = rec["imageOffset"]["w"] / sx
-            oh_pts = rec["imageOffset"]["h"] / sy
-
-            # 3) Convert pts → pixels via actual PPI
-            dpi_x = rec["actualPpi"]["x"]
-            dpi_y = rec["actualPpi"]["y"]
-            ox_px = int(ox_pts * dpi_x / 72)
-            oy_px = int(oy_pts * dpi_y / 72)
-            ow_px = int(ow_pts * dpi_x / 72)
-            oh_px = int(oh_pts * dpi_y / 72)
-
-            # Base crop region
+            # Define base region
             left, top, w, h = ox_px, oy_px, ow_px, oh_px
-
             target_ratio = out_size[0] / out_size[1]
             current_ratio = w / h if h else target_ratio
 
-            # If exact template but ratio mismatch, center crop
+            # Center for exact templates if ratio mismatch
             if not is_custom and abs(current_ratio - target_ratio) > 1e-3:
                 if current_ratio > target_ratio:
                     new_w = int(h * target_ratio)
@@ -110,9 +101,8 @@ if page is not None and image_file and (size_mappings or custom_sizes):
                     top += (h - new_h) // 2
                     h = new_h
 
-            # If custom, center a ratio-correct region inside base
+            # Center for custom sizes
             if is_custom:
-                # Fit maximal region of desired ratio inside w×h
                 new_w = w
                 new_h = int(new_w / target_ratio)
                 if new_h > h:
@@ -121,10 +111,10 @@ if page is not None and image_file and (size_mappings or custom_sizes):
                 xc = left + w // 2
                 yc = top + h // 2
                 left = max(0, xc - new_w // 2)
-                top  = max(0, yc - new_h // 2)
+                top = max(0, yc - new_h // 2)
                 w, h = new_w, new_h
 
-            # Clamp & crop
+            # Clamp
             left = max(0, min(left, img_w - 1))
             top  = max(0, min(top, img_h - 1))
             w    = max(1, min(w, img_w - left))
