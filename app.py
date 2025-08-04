@@ -36,24 +36,37 @@ custom_sizes = []
 records = []
 if page is not None and doc_data:
     records = [r for r in doc_data if r["page"] == page]
-    # Prefill with pixel dims (pts → px via effectivePpi)
-    df_sizes = pd.DataFrame([
-        {
-            "Template": rec["template"],
-            "Width": int(rec["frame"]["w"] * rec["effectivePpi"]["x"] / 72),
-            "Height": int(rec["frame"]["h"] * rec["effectivePpi"]["y"] / 72)
-        }
-        for rec in records
-    ] + [{"Template": "[CUSTOM]", "Width": None, "Height": None}])
-    edited = st.data_editor(df_sizes, key="size_editor", num_rows="dynamic")
+    # Prefill with frame dimensions (points) and aspect ratio
+    df_sizes = pd.DataFrame(
+        [
+            {
+                "Template": rec["template"],
+                "Width_pt": rec["frame"]["w"],
+                "Height_pt": rec["frame"]["h"],
+                "Aspect": rec.get("aspectRatio")
+            }
+            for rec in records
+        ] + [{"Template": "[CUSTOM]", "Width_pt": None, "Height_pt": None, "Aspect": None}]
+    )
+    # Let user input desired output pixel sizes for each template or custom
+    edited = st.data_editor(
+        df_sizes,
+        column_order=["Template","Width_pt","Height_pt","Aspect"],
+        hide_index=True,
+        key="size_editor",
+        num_rows="dynamic"
+    )
     for _, row in edited.iterrows():
         tpl = row["Template"]
-        w = row["Width"]
-        h = row["Height"]
+        w = row.get("Width_px") or row.get("Width_pt")
+        h = row.get("Height_px") or row.get("Height_pt")
         if pd.notna(w) and pd.notna(h):
             if tpl == "[CUSTOM]":
                 custom_sizes.append((int(w), int(h)))
             else:
+                size_mappings.append({"template": tpl, "size": [int(w), int(h)]})
+else:
+    st.info("Upload JSON and select a page to define output sizes.")
                 size_mappings.append({"template": tpl, "size": [int(w), int(h)]})
 else:
     st.info("Upload JSON and select a page to define output sizes.")
