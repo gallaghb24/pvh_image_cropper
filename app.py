@@ -143,7 +143,7 @@ if (size_mappings or custom_sizes) and image_file:
                 width=img_w, height=img_h,
                 initial_drawing=[{'type':'rect','x':init_l,'y':init_t,'width':init_w,'height':init_h,'strokeColor':'#00FF00'}],
                 drawing_mode='transform'
-            )(
+            )
                 fill_color='', stroke_width=2,
                 background_image=bg_bytes,
                 width=img_w, height=img_h,
