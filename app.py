@@ -127,26 +127,7 @@ if records:
         df_guidelines,
         hide_index=True,
         key="guidelines_editor",
-        column_config={"Include": st.column_config.ToggleColumn(label="Include crop?", default=True)}
-    )
-    selected_templates = edited[edited["Include"]]["Template"].tolist()
-
-    # ——————————————————————————————————————————————————————————
-    # Custom Output Sizes
-    # ——————————————————————————————————————————————————————————
-    custom_rows = []
-    for w, h in custom_sizes:
-        ar = round(w / h, 2)
-        base_tpl = min(
-            records,
-            key=lambda r: abs((w/h) - r["frame"]["w"]/r["frame"]["h"])
-        )["template"]
-        custom_rows.append({
-            "Template": f"{base_tpl} Custom {w}×{h}",
-            "Width_px": w,
-            "Height_px": h,
-            "Aspect Ratio": ar
-        })
+        
     df_custom = pd.DataFrame(custom_rows)
     st.subheader("Custom Output Sizes")
     st.dataframe(df_custom, use_container_width=True)
