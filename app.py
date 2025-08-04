@@ -127,11 +127,17 @@ if custom_sizes:
             # Horizontal slider
             min_x = -init_l
             max_x = img_w - init_l - init_w
-            shift_x = st.slider('Shift left/right', min_x, max_x, 0, key=f'shiftx_{cw}_{ch}')
+            if min_x <= max_x:
+                shift_x = st.slider('Shift left/right', min_x, max_x, 0, key=f'shiftx_{cw}_{ch}')
+            else:
+                shift_x = 0
             # Vertical slider
             min_y = -init_t
             max_y = img_h - init_t - init_h
-            shift_y = st.slider('Shift up/down', min_y, max_y, 0, key=f'shifty_{cw}_{ch}')
+            if min_y <= max_y:
+                shift_y = st.slider('Shift up/down', min_y, max_y, 0, key=f'shifty_{cw}_{ch}')
+            else:
+                shift_y = 0
             # Preview
             crop = img_orig.crop((init_l+shift_x, init_t+shift_y, init_l+shift_x+init_w, init_t+shift_y+init_h))
             crop = crop.resize((cw, ch), Image.LANCZOS)
