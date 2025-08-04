@@ -61,6 +61,8 @@ if page is not None and doc_data and image_file:
         }
     else:
         face_box = None
+    # disable saliency fallback
+    sal_box = None
 
     # Build size mapping table
     df_rows = []
