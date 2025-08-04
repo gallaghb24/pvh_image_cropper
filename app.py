@@ -151,25 +151,25 @@ if custom_sizes:
             # Height offset sliders
             colh1, colh2 = st.columns([3, 1])
             if min_y == max_y:
-                with colh1:
-                    st.markdown("<div style='height:35px'></div>", unsafe_allow_html=True)
-                with colh2:
-                    sy = st.number_input("Height", value=0, disabled=True, key=f"synum_{idx}")
+                pass  # Hide both slider and number box if shifting is not possible
             else:
                 with colh1:
                     sy = st.slider("Height Offset", min_y, max_y, st.session_state[sy_key], 1, key=f"syslider_{idx}")
                 with colh2:
                     sy = st.number_input("Height", min_y, max_y, sy, 1, key=f"synum_{idx}", label_visibility="collapsed")
-            st.session_state[sy_key] = sy
-
+            st.session_state[sy_key] = sy if min_y != max_y else 0
+            
             # Width offset sliders
             colw1, colw2 = st.columns([3, 1])
-            with colw1:
-                sx = 0 if min_x == max_x else st.slider("Width Offset", min_x, max_x, st.session_state[sx_key], 1, key=f"sxslider_{idx}")
-            with colw2:
-                sx = st.number_input("Width", min_x, max_x, sx, 1, key=f"sxnum_{idx}", label_visibility="collapsed")
-            st.session_state[sx_key] = sx
-
+            if min_x == max_x:
+                pass  # Hide both slider and number box if shifting is not possible
+            else:
+                with colw1:
+                    sx = st.slider("Width Offset", min_x, max_x, st.session_state[sx_key], 1, key=f"sxslider_{idx}")
+                with colw2:
+                    sx = st.number_input("Width", min_x, max_x, sx, 1, key=f"sxnum_{idx}", label_visibility="collapsed")
+            st.session_state[sx_key] = sx if min_x != max_x else 0
+            
             # Zoom control sliders (always last)
             colz1, colz2 = st.columns([3, 1])
             with colz1:
