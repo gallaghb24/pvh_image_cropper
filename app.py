@@ -6,6 +6,7 @@ from io import BytesIO
 import zipfile
 import numpy as np
 import cv2
+import base64
 from streamlit_drawable_canvas import st_canvas
 
 # --- Helper Functions ---
