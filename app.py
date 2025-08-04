@@ -148,7 +148,7 @@ if custom_sizes and image_file:
             x0, y0 = init_l + shift_x, init_t + shift_y
             x1, y1 = x0 + init_w, y0 + init_h
             preview = img_orig.crop((x0, y0, x1, y1)).resize((cw, ch), Image.LANCZOS)
-            st.image(preview, caption=f"Preview {cw}×{ch}", width=300)
+            st.image(preview, caption=f"Preview {cw}×{ch}", width=900, height=500)
             custom_shifts[(cw, ch)] = (shift_x, shift_y)
 
 # --- Generate & Download ---
