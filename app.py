@@ -131,7 +131,11 @@ if custom_sizes and image_file:
             min_y = -init_t
             max_y = img_h - init_t - init_h
 
-            # Inputs with automatic default
+                        # Inputs with automatic default (ensure min<=max)
+            if min_x > max_x:
+                max_x = min_x
+            if min_y > max_y:
+                min_y = max_y
             shift_x = st.number_input(
                 "Shift left/right (px)",
                 min_value=min_x,
@@ -153,11 +157,7 @@ if custom_sizes and image_file:
                 init_t + shift_y,
                 init_l + shift_x + init_w,
                 init_t + shift_y + init_h
-            ))
-            crop = crop.resize((cw, ch), Image.LANCZOS)
-            st.image(crop, caption=f"Preview {cw}×{ch}", use_container_width=True)
-
-            custom_shifts[(cw, ch)] = (shift_x, shift_y)
+            ))[(cw, ch)] = (shift_x, shift_y)
 
 # --- Generate & Download ---[(cw, ch)] = (shift_x, shift_y)
 
