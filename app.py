@@ -128,21 +128,29 @@ if custom_sizes:
             min_x = -init_l
             max_x = img_w - init_l - init_w
             if min_x <= max_x:
-                shift_x = st.slider('Shift left/right', min_x, max_x, 0, key=f'shiftx_{cw}_{ch}')
-            else:
-                shift_x = 0
-            # Vertical slider
-            min_y = -init_t
-            max_y = img_h - init_t - init_h
-            if min_y <= max_y:
-                shift_y = st.slider('Shift up/down', min_y, max_y, 0, key=f'shifty_{cw}_{ch}')
-            else:
-                shift_y = 0
-            # Preview
-            crop = img_orig.crop((init_l+shift_x, init_t+shift_y, init_l+shift_x+init_w, init_t+shift_y+init_h))
-            crop = crop.resize((cw, ch), Image.LANCZOS)
-            st.image(crop, caption=f'Preview {cw}×{ch}', use_container_width=True)
-            custom_shifts[(cw, ch)] = (shift_x, shift_y)
+                                # horizontal shift input
+                shift_x = st.number_input(
+                    'Shift left/right (px)',
+                    min_value=-img_w, max_value=img_w,
+                    value=0,
+                    step=1,
+                    key=f'shiftx_{cw}_{ch}'
+                )
+                # vertical shift input
+                shift_y = st.number_input(
+                    'Shift up/down (px)',
+                    min_value=-img_h, max_value=img_h,
+                    value=0,
+                    step=1,
+                    key=f'shifty_{cw}_{ch}'
+                )
+                # preview
+                crop = img_orig.crop((init_l+shift_x, init_t+shift_y, init_l+shift_x+init_w, init_t+shift_y+init_h))
+                crop = crop.resize((cw, ch), Image.LANCZOS)
+                st.image(crop, caption=f'Preview {cw}×{ch}', use_container_width=True)
+                custom_shifts[(cw, ch)] = (shift_x, shift_y)
+
+    # --- Generate & Download ---[(cw, ch)] = (shift_x, shift_y)
 
 # --- Generate & Download ---
 if (size_mappings or custom_sizes) and image_file:
