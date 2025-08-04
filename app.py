@@ -31,7 +31,6 @@ def compute_crop(rec, img_w, img_h):
             h = new_h
     return left, top, w, h
 
-
 def auto_custom_start(rec, img_w, img_h, cw, ch):
     left, top, w, h = compute_crop(rec, img_w, img_h)
     tgt = cw / ch
@@ -105,64 +104,132 @@ else:
 
 # ——————————————————————————————————————————————————————————
 # Available Crops from Guidelines
-st.subheader("Available Crops from Guidelines")
-# Build list of guideline crops
-guideline_rows = []
-for rec in records:
-    w_pt, h_pt = rec["frame"]["w"], rec["frame"]["h"]
-    eff_x, eff_y = rec["effectivePpi"]["x"], rec["effectivePpi"]["y"]
-    w_px = int(w_pt * eff_x / 72)
-    h_px = int(h_pt * eff_y / 72)
-    ar = round(w_px / h_px, 2)
-    guideline_rows.append({
-        "Template": rec["template"],
-        "Width_px": w_px,
-        "Height_px": h_px,
-        "Aspect Ratio": ar
-    })
-# Let user select which guidelines to output
-df_guidelines = pd.DataFrame(guideline_rows)
-selected_templates = st.multiselect(
-    "Select guideline crops to include:",
-    options=df_guidelines["Template"].tolist(),
-    default=df_guidelines["Template"].tolist()
-)
-st.dataframe(df_guidelines[df_guidelines["Template"].isin(selected_templates)], use_container_width=True)
-
 # ——————————————————————————————————————————————————————————
-# Custom Output Sizes
-st.subheader("Custom Output Sizes")
-custom_rows = []
-for w, h in custom_sizes:
-    ar = round(w / h, 2)
-    # find base template
-    base_tpl = min(records, key=lambda r: abs((w/h) - r["frame"]["w"]/r["frame"]["h"]))["template"]
-    custom_rows.append({
-        "Template": base_tpl + f" Custom {w}×{h}",
-        "Width_px": w,
-        "Height_px": h,
-        "Aspect Ratio": ar
-    })
+if records:
+    guideline_rows = []
+    for rec in records:
+        w_pt, h_pt = rec["frame"]["w"], rec["frame"]["h"]
+        eff_x, eff_y = rec["effectivePpi"]["x"], rec["effectivePpi"]["y"]
+        w_px = int(w_pt * eff_x / 72)
+        h_px = int(h_pt * eff_y / 72)
+        guideline_rows.append({
+            "Template": rec["template"],
+            "Width_px": w_px,
+            "Height_px": h_px,
+            "Aspect Ratio": round(w_px / h_px, 2)
+        })
+    df_guidelines = pd.DataFrame(guideline_rows)
+    selected_templates = st.multiselect(
+        "Select guideline crops to include:",
+        options=df_guidelines["Template"].tolist(),
+        default=df_guidelines["Template"].tolist()
+    )
+    st.subheader("Available Crops from Guidelines")
+    st.dataframe(
+        df_guidelines[df_guidelines["Template"].isin(selected_templates)],
+        use_container_width=True
+    )
 
-df_custom = pd.DataFrame(custom_rows)
-st.dataframe(df_custom, use_container_width=True)
+    # ——————————————————————————————————————————————————————————
+    # Custom Output Sizes
+    # ——————————————————————————————————————————————————————————
+    custom_rows = []
+    for w, h in custom_sizes:
+        ar = round(w / h, 2)
+        base_tpl = min(
+            records,
+            key=lambda r: abs((w/h) - r["frame"]["w"]/r["frame"]["h"])
+        )["template"]
+        custom_rows.append({
+            "Template": f"{base_tpl} Custom {w}×{h}",
+            "Width_px": w,
+            "Height_px": h,
+            "Aspect Ratio": ar
+        })
+    df_custom = pd.DataFrame(custom_rows)
+    st.subheader("Custom Output Sizes")
+    st.dataframe(df_custom, use_container_width=True)
 
-# Generate combined outputs list
-final_templates = [t for t in selected_templates]
+    # ——————————————————————————————————————————————————————————
+    # Prep image & face-box
+    # ——————————————————————————————————————————————————————————
+    img_orig = Image.open(image_file)
+    img_w, img_h = img_orig.size
+    np_img = np.array(img_orig)
+    gray = cv2.cvtColor(np_img, cv2.COLOR_BGR2GRAY)
+    cascade = cv2.CascadeClassifier(
+        cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+    )
+    dets = cascade.detectMultiScale(gray, 1.1, 5, minSize=(30,30))
+    face_box = None
+    if len(dets) > 0:
+        xs, ys, ws, hs = zip(*dets)
+        face_box = {
+            "left": min(xs),
+            "top": min(ys),
+            "right": max(x+w for x,w in zip(xs,ws)),
+            "bottom": max(y+h for y,h in zip(ys,hs)),
+        }
 
-# Now proceed to Face detection and Generation
+    # ——————————————————————————————————————————————————————————
+    # Manual Adjustments for Custom Crops
+    # ——————————————————————————————————————————————————————————
+    if custom_sizes:
+        st.subheader("Adjust Custom Crops")
+        tabs = st.tabs([f"{cw}×{ch}" for cw,ch in custom_sizes])
+        custom_shifts = {}
+        for i, ((cw, ch), tab) in enumerate(zip(custom_sizes, tabs)):
+            with tab:
+                st.write(f"Fine-tune crop for **{cw}×{ch}**")
+                rec = min(
+                    records,
+                    key=lambda r: abs((cw/ch) - r["frame"]["w"]/r["frame"]["h"])
+                )
+                left, top, w, h = auto_custom_start(rec, img_w, img_h, cw, ch)
+                min_x, max_x = -left, img_w - left - w
+                min_y, max_y = -top, img_h - top - h
+                if min_x > max_x: min_x, max_x = max_x, min_x
+                if min_y > max_y: min_y, max_y = max_y, min_y
+
+                if min_x == max_x:
+                    shift_x = 0
+                else:
+                    shift_x = st.slider(
+                        "Shift left/right",
+                        min_value=min_x, max_value=max_x,
+                        value=0, step=1, key=f"shiftx_{i}"
+                    )
+
+                if min_y == max_y:
+                    shift_y = 0
+                else:
+                    shift_y = st.slider(
+                        "Shift up/down",
+                        min_value=min_y, max_value=max_y,
+                        value=0, step=1, key=f"shifty_{i}"
+                    )
+
+                x0, y0 = left + shift_x, top + shift_y
+                preview = img_orig.crop((x0, y0, x0+w, y0+h)).resize((cw, ch), Image.LANCZOS)
+                st.image(preview, caption=f"Preview {cw}×{ch}", width=900)
+
+                custom_shifts[(cw, ch)] = (shift_x, shift_y)
+
+    # ——————————————————————————————————————————————————————————
     # Generate & Download
+    # ——————————————————————————————————————————————————————————
     zip_buf = BytesIO()
     with zipfile.ZipFile(zip_buf, "w") as zf:
         # guidelines
         for rec in records:
-            if rec['template'] in selected_templates:
-                out_w = int(rec['frame']['w'] * rec['effectivePpi']['x'] / 72)
-                out_h = int(rec['frame']['h'] * rec['effectivePpi']['y'] / 72)
+            if rec["template"] in selected_templates:
+                out_w = int(rec["frame"]["w"] * rec["effectivePpi"]["x"] / 72)
+                out_h = int(rec["frame"]["h"] * rec["effectivePpi"]["y"] / 72)
                 left, top, w, h = compute_crop(rec, img_w, img_h)
                 crop = img_orig.crop((left, top, left+w, top+h)).resize((out_w, out_h), Image.LANCZOS)
                 buf = BytesIO(); crop.save(buf, format="PNG"); buf.seek(0)
                 zf.writestr(f"{rec['template']}_{out_w}x{out_h}.png", buf.getvalue())
+
         # customs
         for row in df_custom.itertuples():
             cw, ch = row.Width_px, row.Height_px
@@ -178,6 +245,7 @@ final_templates = [t for t in selected_templates]
             crop = img_orig.crop((left, top, left+w, top+h)).resize((cw, ch), Image.LANCZOS)
             buf = BytesIO(); crop.save(buf, format="PNG"); buf.seek(0)
             zf.writestr(f"{tpl}.png", buf.getvalue())
+
     zip_buf.seek(0)
     st.download_button(
         "📥 Download All Crops",
@@ -185,3 +253,6 @@ final_templates = [t for t in selected_templates]
         file_name=f"crops_{image_file.name}.zip",
         mime="application/zip",
     )
+
+else:
+    st.info("Upload JSON + image to see Output Sizes.")
