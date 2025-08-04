@@ -122,73 +122,33 @@ if custom_sizes and image_file:
     for i, ((cw, ch), tab) in enumerate(zip(custom_sizes, tabs)):
         with tab:
             st.write(f"Adjust crop for **{cw}×{ch}**")
-            rec = min(records, key=lambda r: abs((cw/ch) - r.get("aspectRatio", r["frame"]["w"]/r["frame"]["h"])))
+            # pick best template ratio
+            rec = min(
+                records,
+                key=lambda r: abs((cw/ch) - r.get("aspectRatio", r["frame"]["w"]/r["frame"]["h"]))
+            )
+            # initial custom window
             init_l, init_t, init_w, init_h = auto_custom_start(rec, img_w, img_h, cw, ch)
-
-            # Compute shift bounds
-            min_x = -init_l
-            max_x = img_w - init_l - init_w
-            min_y = -init_t
-            max_y = img_h - init_t - init_h
-
-                                    # Inputs with automatic default (ensure min<=max)
-            if min_x > max_x:
-                max_x = min_x
-            if min_y > max_y:
-                min_y = max_y
+            # compute shift bounds
+            min_x, max_x = -init_l, img_w - init_l - init_w
+            min_y, max_y = -init_t, img_h - init_t - init_h
+            # clamp any inverted bounds
+            if min_x > max_x: min_x, max_x = max_x, min_x
+            if min_y > max_y: min_y, max_y = max_y, min_y
+            # user inputs
             shift_x = st.number_input(
-                "Shift left/right (px)",
-                min_value=min_x,
-                max_value=max_x,
-                step=1,
-                key=f"shiftx_{cw}_{ch}_{i}"
+                "Shift left/right (px)", min_value=min_x, max_value=max_x,
+                step=1, key=f"shiftx_{cw}_{ch}_{i}"
             )
             shift_y = st.number_input(
-                "Shift up/down (px)",
-                min_value=min_y,
-                max_value=max_y,
-                step=1,
-                key=f"shifty_{cw}_{ch}_{i}"
+                "Shift up/down (px)", min_value=min_y, max_value=max_y,
+                step=1, key=f"shifty_{cw}_{ch}_{i}"
             )
-
-            # Compute preview crop and show
-            x0 = init_l + shift_x
-            y0 = init_t + shift_y
-            x1 = x0 + init_w
-            y1 = y0 + init_h
-            crop_preview = img_orig.crop((x0, y0, x1, y1))
-            crop_preview = crop_preview.resize((cw, ch), Image.LANCZOS)
-            st.image(crop_preview, caption=f"Preview {cw}×{ch}", use_container_width=True)
-
-            custom_shifts[(cw, ch)] = (shift_x, shift_y)
-            if min_x > max_x:
-                max_x = min_x
-            if min_y > max_y:
-                min_y = max_y
-            shift_x = st.number_input(
-                "Shift left/right (px)",
-                min_value=min_x,
-                max_value=max_x,
-                step=1,
-                key=f"shiftx_{cw}_{ch}"
-            )
-            shift_y = st.number_input(
-                "Shift up/down (px)",
-                min_value=min_y,
-                max_value=max_y,
-                step=1,
-                key=f"shifty_{cw}_{ch}"
-            )
-
-                        # Show preview
-            crop_preview = img_orig.crop((
-                init_l + shift_x,
-                init_t + shift_y,
-                init_l + shift_x + init_w,
-                init_t + shift_y + init_h
-            ))
-            crop_preview = crop_preview.resize((cw, ch), Image.LANCZOS)
-            st.image(crop_preview, caption=f"Preview {cw}×{ch}", use_container_width=True)
+            # generate preview once
+            x0, y0 = init_l + shift_x, init_t + shift_y
+            x1, y1 = x0 + init_w, y0 + init_h
+            preview = img_orig.crop((x0, y0, x1, y1)).resize((cw, ch), Image.LANCZOS)
+            st.image(preview, caption=f"Preview {cw}×{ch}", use_container_width=True)
             custom_shifts[(cw, ch)] = (shift_x, shift_y)
 
 # --- Generate & Download ---
