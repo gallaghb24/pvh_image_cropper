@@ -95,14 +95,14 @@ if page is not None and image_file and (size_mappings or custom_sizes):
     img = Image.open(image_file)
     img_w, img_h = img.size
 
-    # Prepare crop tasks
+    # Combine exact and custom tasks
     crops_to_generate = []
-    for rec in records:
-        for m in size_mappings:
-            if m["template"] == rec["template"]:
-                crops_to_generate.append((rec, m["size"], False))
+    # exact crops: size_mappings now holds (record, size, False)
+    crops_to_generate.extend(size_mappings)
+    # custom crops
     for cw, ch in custom_sizes:
         target_r = cw / ch
+        # pick the best matching record
         best = min(records, key=lambda r: abs(r["aspectRatio"] - target_r))
         crops_to_generate.append((best, [cw, ch], True))
 
@@ -135,6 +135,49 @@ if page is not None and image_file and (size_mappings or custom_sizes):
                     left += (w - new_w) // 2
                     w = new_w
                 else:
+                    new_h = int(w / target_ratio)
+                    top += (h - new_h) // 2
+                    h = new_h
+
+            # custom size centering
+            if is_custom:
+                new_w = w
+                new_h = int(new_w / target_ratio)
+                if new_h > h:
+                    new_h = h
+                    new_w = int(new_h * target_ratio)
+                xc = left + w // 2
+                yc = top + h // 2
+                left = max(0, xc - new_w // 2)
+                top = max(0, yc - new_h // 2)
+                w, h = new_w, new_h
+
+            # clamp
+            left = max(0, min(left, img_w - 1))
+            top = max(0, min(top, img_h - 1))
+            w = max(1, min(w, img_w - left))
+            h = max(1, min(h, img_h - top))
+
+            crop_img = img.crop((left, top, left + w, top + h))
+            crop_img = crop_img.resize(tuple(out_size), Image.LANCZOS)
+
+            tpl_label = rec["template"] + ("_custom" if is_custom else "")
+            img_bytes = BytesIO()
+            crop_img.save(img_bytes, format="PNG")
+            img_bytes.seek(0)
+            fname = f"{tpl_label}_{out_size[0]}x{out_size[1]}.png"
+            zf.writestr(fname, img_bytes.getvalue())
+
+    zip_buffer.seek(0)
+    st.download_button(
+        "Download Crops",
+        data=zip_buffer.getvalue(),
+        file_name=f"page_{page}_crops.zip",
+        mime="application/zip",
+    )
+else:
+    if page is not None:
+        st.warning("Please upload an image and define at least one size.")
                     new_h = int(w / target_ratio)
                     top += (h - new_h) // 2
                     h = new_h
