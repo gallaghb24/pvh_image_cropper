@@ -42,7 +42,7 @@ def auto_custom_start(rec, img_w, img_h, cw, ch):
 
 # --- App Setup ---
 st.set_page_config(page_title='CropPack Tester', layout='wide')
-st.title('CropPack Web App Prototype')
+st.title('Smart Crop Automation Prototype')
 
 # --- Sidebar Inputs ---
 st.sidebar.header('Inputs')
