@@ -144,12 +144,22 @@ if custom_sizes and image_file:
                 "Shift left/right (px)",
                 min_value=min_x,
                 max_value=max_x,
+                step=1,
+                key=f"shiftx_{cw}_{ch}"
+            )",
+                min_value=min_x,
+                max_value=max_x,
                 value=dx0,
                 step=1,
                 key=f"shiftx_{cw}_{ch}"
             )
             shift_y = st.number_input(
                 "Shift up/down (px)",
+                min_value=min_y,
+                max_value=max_y,
+                step=1,
+                key=f"shifty_{cw}_{ch}"
+            )",
                 min_value=min_y,
                 max_value=max_y,
                 value=dy0,
