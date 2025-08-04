@@ -160,7 +160,9 @@ if size_mappings or custom_sizes:
             left=max(0,min(left,img_w-1)); top=max(0,min(top,img_h-1))
             w=max(1,min(w,img_w-left)); h=max(1,min(h,img_h-top))
             crop=img.crop((left,top,left+w,top+h))
-            crop=crop.resize(tuple(out_size),Image.LANCZOS)
+            # only resize standard template crops to target size; leave custom crops unresized to preserve proportions
+            if not is_custom:
+                crop = crop.resize(tuple(out_size), Image.LANCZOS)
             buf=BytesIO(); crop.save(buf,format="PNG"); buf.seek(0)
             fname=f"{rec['template']}_{out_size[0]}x{out_size[1]}.png"
             zf.writestr(fname,buf.getvalue())
