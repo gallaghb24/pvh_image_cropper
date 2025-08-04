@@ -7,15 +7,37 @@ import numpy as np
 import cv2
 
 # ——————————————————————————————————————————————————————————
-# Helper functions (fill in your logic)
+# Helper functions
 # ——————————————————————————————————————————————————————————
 def compute_crop(rec, img_w, img_h):
-    # … your compute_crop logic …
-    pass
+    off = rec['imageOffset']
+    fr = rec['frame']
+    fx, fy = abs(off['x']), abs(off['y'])
+    fw, fh = off['w'], off['h']
+    left = int((fx / fw) * img_w)
+    top  = int((fy / fh) * img_h)
+    w    = int((fr['w']  / fw) * img_w)
+    h    = int((fr['h']  / fh) * img_h)
+    target = fr['w'] / fr['h']
+    current = w / h if h else target
+    if abs(current - target) > 1e-3:
+        if current > target:
+            new_w = int(h * target)
+            left += (w - new_w) // 2
+            w = new_w
+        else:
+            new_h = int(w / target)
+            top += (h - new_h) // 2
+            h = new_h
+    return left, top, w, h
+
 
 def auto_custom_start(rec, img_w, img_h, cw, ch):
-    # … your start logic …
-    pass
+    left, top, w, h = compute_crop(rec, img_w, img_h)
+    tgt = cw / ch
+    new_h = int(w / tgt)
+    top += (h - new_h) // 2
+    return left, top, w, new_h
 
 # ——————————————————————————————————————————————————————————
 # App setup
@@ -26,7 +48,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# force sidebar to fixed 450px width via CSS
+# Sidebar width fixed at 450px
 st.markdown(
     """
     <style>
@@ -51,7 +73,6 @@ image_file = st.sidebar.file_uploader(
     type=["png","jpg","jpeg","tif","tiff"]
 )
 
-# Custom sizes editor in sidebar
 with st.sidebar.expander("⚙️ Custom Output Sizes", expanded=True):
     st.markdown("Add extra output dimensions here:")
     custom_df = st.data_editor(
@@ -112,9 +133,7 @@ if records:
     df_outputs = pd.DataFrame(rows)
     st.dataframe(df_outputs, use_container_width=True)
 
-    # ————————————————————————————————————————————————
     # Face detection for custom crops
-    # ————————————————————————————————————————————————
     img_orig = Image.open(image_file)
     img_w, img_h = img_orig.size
     np_img = np.array(img_orig)
@@ -133,9 +152,7 @@ if records:
             "bottom": max(y+h for y,h in zip(ys,hs)),
         }
 
-    # ——————————————————————————————————————————————————————————
     # Generate & Download
-    # ——————————————————————————————————————————————————————————
     zip_buf = BytesIO()
     with zipfile.ZipFile(zip_buf, "w") as zf:
         # templates
