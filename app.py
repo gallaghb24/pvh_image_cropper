@@ -15,7 +15,7 @@ image_file = st.sidebar.file_uploader(
     "Upload Master Asset Image", type=["png","jpg","jpeg","tif","tiff"]
 )
 
-# --- Select Page ---
+# Select Page
 st.sidebar.markdown("---")
 pages, doc_data = [], []
 if json_file:
@@ -31,30 +31,22 @@ if pages:
 
 # --- Main: Output Sizes Editor ---
 st.subheader("Output Sizes Mapping")
+# We’ll map each record individually rather than grouping by template
 size_mappings = []
 custom_sizes = []
 records = []
-
 if page is not None and doc_data:
-    # Filter to only this page’s records
+    # Filter to this page
     records = [r for r in doc_data if r["page"] == page]
-
-    # Extract master asset’s effective PPI (use first “Master Asset” record)
-    master = next((r for r in records if r["template"] == "Master Asset"), None)
-    if master:
-        master_eff_x = master["effectivePpi"]["x"]
-        master_eff_y = master["effectivePpi"]["y"]
-    else:
-        st.error("No Master Asset found on this page.")
-        st.stop()
-
-    # Build table rows: each crop + its pt & px dims (using master PPI)
+    # Build DataFrame rows matching each record
     df_rows = []
     for rec in records:
         w_pt = rec["frame"]["w"]
         h_pt = rec["frame"]["h"]
-        w_px = int(w_pt * master_eff_x / 72)
-        h_px = int(h_pt * master_eff_y / 72)
+        eff_x = rec["effectivePpi"]["x"]
+        eff_y = rec["effectivePpi"]["y"]
+        w_px = int(w_pt * eff_x / 72)
+        h_px = int(h_pt * eff_y / 72)
         df_rows.append({
             "Template": rec["template"],
             "Width_pt": w_pt,
@@ -63,42 +55,36 @@ if page is not None and doc_data:
             "Height_px": h_px,
             "Aspect": rec.get("aspectRatio")
         })
-    # Add custom row
-    df_rows.append({
-        "Template": "[CUSTOM]",
-        "Width_pt": None,
-        "Height_pt": None,
-        "Width_px": None,
-        "Height_px": None,
-        "Aspect": None
-    })
-
+    # Add a CUSTOM row at end
+    df_rows.append({"Template":"[CUSTOM]","Width_pt":None,"Height_pt":None,"Width_px":None,"Height_px":None,"Aspect":None})
     df_sizes = pd.DataFrame(df_rows)
     edited = st.data_editor(
         df_sizes,
         column_config={
             "Template": st.column_config.TextColumn("Template"),
-            "Width_pt": st.column_config.NumberColumn("Width (pt)", format="%.2f"),
-            "Height_pt": st.column_config.NumberColumn("Height (pt)", format="%.2f"),
-            "Width_px": st.column_config.NumberColumn("Width (px)"),
-            "Height_px": st.column_config.NumberColumn("Height (px)"),
+            "Width_px": st.column_config.NumberColumn("Output Width (px)"),
+            "Height_px": st.column_config.NumberColumn("Output Height (px)"),
+            "Width_pt": st.column_config.NumberColumn("Frame Width (pt)", format="%.2f"),
+            "Height_pt": st.column_config.NumberColumn("Frame Height (pt)", format="%.2f"),
             "Aspect": st.column_config.NumberColumn("Aspect Ratio", format="%.2f")
         },
         hide_index=True,
         key="size_editor",
         num_rows="dynamic"
     )
-
-    # Extract mappings from edited table
-    for _, row in edited.iterrows():
+    # Map each of the first N rows to its record
+    for idx, row in edited.iloc[:len(records)].iterrows():
         tpl = row["Template"]
-        w = row.get("Width_px") or row.get("Width_pt")
-        h = row.get("Height_px") or row.get("Height_pt")
+        w = row["Width_px"]
+        h = row["Height_px"]
         if pd.notna(w) and pd.notna(h):
-            if tpl == "[CUSTOM]":
-                custom_sizes.append((int(w), int(h)))
-            else:
-                size_mappings.append({"template": tpl, "size": [int(w), int(h)]})
+            size_mappings.append((records[idx], [int(w), int(h)], False))
+    # CUSTOM rows
+    for _, row in edited.iloc[len(records):].iterrows():
+        w = row["Width_px"]
+        h = row["Height_px"]
+        if pd.notna(w) and pd.notna(h):
+            custom_sizes.append((int(w), int(h)))
 else:
     st.info("Upload JSON and select a page to define output sizes.")
 
@@ -123,7 +109,6 @@ if page is not None and image_file and (size_mappings or custom_sizes):
     zip_buffer = BytesIO()
     with zipfile.ZipFile(zip_buffer, "w") as zf:
         for rec, out_size, is_custom in crops_to_generate:
-            # Compute fraction of displayed image
             img_offset = rec["imageOffset"]
             frame = rec["frame"]
             disp_w = img_offset["w"]
@@ -134,8 +119,6 @@ if page is not None and image_file and (size_mappings or custom_sizes):
             frac_y = off_y / disp_h
             frac_w = frame["w"] / disp_w
             frac_h = frame["h"] / disp_h
-
-            # Map to pixel coords on high-res
             ox_px = int(frac_x * img_w)
             oy_px = int(frac_y * img_h)
             ow_px = int(frac_w * img_w)
@@ -145,7 +128,7 @@ if page is not None and image_file and (size_mappings or custom_sizes):
             target_ratio = out_size[0] / out_size[1]
             current_ratio = w / h if h else target_ratio
 
-            # Exact template: center if ratio mismatch
+            # exact template centering
             if not is_custom and abs(current_ratio - target_ratio) > 1e-3:
                 if current_ratio > target_ratio:
                     new_w = int(h * target_ratio)
@@ -156,7 +139,7 @@ if page is not None and image_file and (size_mappings or custom_sizes):
                     top += (h - new_h) // 2
                     h = new_h
 
-            # Custom size: maximal centered box
+            # custom size centering
             if is_custom:
                 new_w = w
                 new_h = int(new_w / target_ratio)
@@ -169,7 +152,7 @@ if page is not None and image_file and (size_mappings or custom_sizes):
                 top = max(0, yc - new_h // 2)
                 w, h = new_w, new_h
 
-            # Clamp & crop
+            # clamp
             left = max(0, min(left, img_w - 1))
             top = max(0, min(top, img_h - 1))
             w = max(1, min(w, img_w - left))
