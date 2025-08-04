@@ -128,18 +128,22 @@ if custom_sizes:
             min_x = -init_l
             max_x = img_w - init_l - init_w
             if min_x <= max_x:
-                                # horizontal shift input
+                                                # calculate allowed horizontal shift range to avoid black borders
+                min_x = -init_l
+                max_x = img_w - init_l - init_w
                 shift_x = st.number_input(
                     'Shift left/right (px)',
-                    min_value=-img_w, max_value=img_w,
+                    min_value=min_x, max_value=max_x,
                     value=0,
                     step=1,
                     key=f'shiftx_{cw}_{ch}'
                 )
-                # vertical shift input
+                # calculate allowed vertical shift range to avoid black borders
+                min_y = -init_t
+                max_y = img_h - init_t - init_h
                 shift_y = st.number_input(
                     'Shift up/down (px)',
-                    min_value=-img_h, max_value=img_h,
+                    min_value=min_y, max_value=max_y,
                     value=0,
                     step=1,
                     key=f'shifty_{cw}_{ch}'
@@ -150,7 +154,7 @@ if custom_sizes:
                 st.image(crop, caption=f'Preview {cw}×{ch}', use_container_width=True)
                 custom_shifts[(cw, ch)] = (shift_x, shift_y)
 
-    # --- Generate & Download ---[(cw, ch)] = (shift_x, shift_y)
+        # --- Generate & Download ---[(cw, ch)] = (shift_x, shift_y)
 
 # --- Generate & Download ---
 if (size_mappings or custom_sizes) and image_file:
