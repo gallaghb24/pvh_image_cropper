@@ -151,34 +151,33 @@ st.dataframe(df_custom, use_container_width=True)
 final_templates = [t for t in selected_templates]
 
 # Now proceed to Face detection and Generation
-# Generate & Download
+    # Generate & Download
     zip_buf = BytesIO()
     with zipfile.ZipFile(zip_buf, "w") as zf:
-        # templates
-        for rec, row in zip(records, df_outputs.iloc[:len(records)].itertuples()):
-            out_w, out_h = row.Width_px, row.Height_px
-            left, top, w, h = compute_crop(rec, img_w, img_h)
-            crop = img_orig.crop((left, top, left+w, top+h))
-            crop = crop.resize((out_w, out_h), Image.LANCZOS)
-            buf = BytesIO(); crop.save(buf, format="PNG"); buf.seek(0)
-            zf.writestr(f"{rec['template']}_{out_w}x{out_h}.png", buf.getvalue())
-
+        # guidelines
+        for rec in records:
+            if rec['template'] in selected_templates:
+                out_w = int(rec['frame']['w'] * rec['effectivePpi']['x'] / 72)
+                out_h = int(rec['frame']['h'] * rec['effectivePpi']['y'] / 72)
+                left, top, w, h = compute_crop(rec, img_w, img_h)
+                crop = img_orig.crop((left, top, left+w, top+h)).resize((out_w, out_h), Image.LANCZOS)
+                buf = BytesIO(); crop.save(buf, format="PNG"); buf.seek(0)
+                zf.writestr(f"{rec['template']}_{out_w}x{out_h}.png", buf.getvalue())
         # customs
-        start_idx = len(records)
-        for idx in range(start_idx, len(df_outputs)):
-            row = df_outputs.iloc[idx]
+        for row in df_custom.itertuples():
             cw, ch = row.Width_px, row.Height_px
+            tpl = row.Template.replace("×", "x")
             rec = min(
                 records,
                 key=lambda r: abs((cw/ch) - r["frame"]["w"]/r["frame"]["h"])
             )
             left, top, w, h = auto_custom_start(rec, img_w, img_h, cw, ch)
-            crop = img_orig.crop((left, top, left+w, top+h))
-            crop = crop.resize((cw, ch), Image.LANCZOS)
-            label = row.Template.replace("×", "x")
+            sx, sy = custom_shifts.get((cw, ch), (0,0))
+            left = max(0, min(left+sx, img_w - w))
+            top  = max(0, min(top+sy, img_h - h))
+            crop = img_orig.crop((left, top, left+w, top+h)).resize((cw, ch), Image.LANCZOS)
             buf = BytesIO(); crop.save(buf, format="PNG"); buf.seek(0)
-            zf.writestr(f"{label}.png", buf.getvalue())
-
+            zf.writestr(f"{tpl}.png", buf.getvalue())
     zip_buf.seek(0)
     st.download_button(
         "📥 Download All Crops",
@@ -186,6 +185,3 @@ final_templates = [t for t in selected_templates]
         file_name=f"crops_{image_file.name}.zip",
         mime="application/zip",
     )
-
-else:
-    st.info("Upload JSON + image to see Output Sizes.")
