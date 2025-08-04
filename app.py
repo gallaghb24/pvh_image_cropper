@@ -7,7 +7,7 @@ import numpy as np
 import cv2
 
 # ——————————————————————————————————————————————————————————
-# Helper functions (unchanged)
+# Helper functions (fill in your logic)
 # ——————————————————————————————————————————————————————————
 def compute_crop(rec, img_w, img_h):
     # … your compute_crop logic …
