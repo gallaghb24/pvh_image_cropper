@@ -31,10 +31,12 @@ if pages:
 
 # --- Main: Output Sizes Editor ---
 st.subheader("Output Sizes Mapping")
-size_mappings, custom_sizes, records = [], [], []
+size_mappings = []
+custom_sizes = []
+records = []
 if page is not None and doc_data:
     records = [r for r in doc_data if r["page"] == page]
-    # Build DataFrame prefilled with pixel dims (pts → px via effective PPI)
+    # Prefill with pixel dims (pts → px via effectivePpi)
     df_sizes = pd.DataFrame([
         {
             "Template": rec["template"],
@@ -44,16 +46,14 @@ if page is not None and doc_data:
         for rec in records
     ] + [{"Template": "[CUSTOM]", "Width": None, "Height": None}])
     edited = st.data_editor(df_sizes, key="size_editor", num_rows="dynamic")
-    for idx, row in edited.iterrows():
-        tpl, w, h = row["Template"], row["Width"], row["Height"]
+    for _, row in edited.iterrows():
+        tpl = row["Template"]
+        w = row["Width"]
+        h = row["Height"]
         if pd.notna(w) and pd.notna(h):
-            # For duplicates, each row maps separately
             if tpl == "[CUSTOM]":
                 custom_sizes.append((int(w), int(h)))
             else:
-                size_mappings.append({"template": tpl, "size": [int(w), int(h)]})
-else:
-    st.info("Upload JSON and select a page to define output sizes.")
                 size_mappings.append({"template": tpl, "size": [int(w), int(h)]})
 else:
     st.info("Upload JSON and select a page to define output sizes.")
@@ -67,33 +67,34 @@ if page is not None and image_file and (size_mappings or custom_sizes):
 
     # Prepare crop tasks
     crops_to_generate = []
+    # exact template crops
     for rec in records:
         for m in size_mappings:
             if m["template"] == rec["template"]:
                 crops_to_generate.append((rec, m["size"], False))
+    # custom size crops
     for cw, ch in custom_sizes:
         target_r = cw / ch
-        best = min(records, key=lambda r: abs(r["aspectRatio"] - target_r))
+        best = min(
+            records,
+            key=lambda r: abs(r["aspectRatio"] - target_r)
+        )
         crops_to_generate.append((best, [cw, ch], True))
 
     zip_buffer = BytesIO()
     with zipfile.ZipFile(zip_buffer, "w") as zf:
         for rec, out_size, is_custom in crops_to_generate:
-            # Compute fraction of original image shown
+            # Convert both template & custom via fraction approach
             img_offset = rec["imageOffset"]
             frame = rec["frame"]
-            # displayed image size in pts
             disp_w = img_offset["w"]
             disp_h = img_offset["h"]
-            # offset of visible window within displayed image
             off_x = abs(img_offset["x"])
             off_y = abs(img_offset["y"])
-            # fraction
             frac_x = off_x / disp_w
             frac_y = off_y / disp_h
             frac_w = frame["w"] / disp_w
             frac_h = frame["h"] / disp_h
-            # compute pixel coords on original high-res
             ox_px = int(frac_x * img_w)
             oy_px = int(frac_y * img_h)
             ow_px = int(frac_w * img_w)
@@ -102,7 +103,8 @@ if page is not None and image_file and (size_mappings or custom_sizes):
             left, top, w, h = ox_px, oy_px, ow_px, oh_px
             target_ratio = out_size[0] / out_size[1]
             current_ratio = w / h if h else target_ratio
-            # exact
+
+            # exact templates: center if mismatch
             if not is_custom and abs(current_ratio - target_ratio) > 1e-3:
                 if current_ratio > target_ratio:
                     new_w = int(h * target_ratio)
@@ -112,7 +114,8 @@ if page is not None and image_file and (size_mappings or custom_sizes):
                     new_h = int(w / target_ratio)
                     top += (h - new_h) // 2
                     h = new_h
-            # custom
+
+            # custom size: maximal centered region
             if is_custom:
                 new_w = w
                 new_h = int(new_w / target_ratio)
@@ -122,15 +125,16 @@ if page is not None and image_file and (size_mappings or custom_sizes):
                 xc = left + w // 2
                 yc = top + h // 2
                 left = max(0, xc - new_w // 2)
-                top = max(0, yc - new_h // 2)
+                top  = max(0, yc - new_h // 2)
                 w, h = new_w, new_h
 
-            # clamp and crop
-            left = max(0, min(left, img_w-1))
-            top  = max(0, min(top, img_h-1))
-            w    = max(1, min(w, img_w-left))
-            h    = max(1, min(h, img_h-top))
-            crop_img = img.crop((left, top, left+w, top+h))
+            # clamp
+            left = max(0, min(left, img_w - 1))
+            top  = max(0, min(top, img_h - 1))
+            w    = max(1, min(w, img_w - left))
+            h    = max(1, min(h, img_h - top))
+
+            crop_img = img.crop((left, top, left + w, top + h))
             crop_img = crop_img.resize(tuple(out_size), Image.LANCZOS)
 
             tpl_label = rec["template"] + ("_custom" if is_custom else "")
