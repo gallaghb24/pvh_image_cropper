@@ -81,14 +81,19 @@ if records:
     for rec in records:
         w_pt, h_pt = rec['frame']['w'], rec['frame']['h']
         eff_x, eff_y = rec['effectivePpi']['x'], rec['effectivePpi']['y']
+        w_px = int(w_pt * eff_x / 72)
+        h_px = int(h_pt * eff_y / 72)
+        ar = round(w_px / h_px, 2) if h_px else None
         rows.append({
             'Template': rec['template'],
-            'Width_px': int(w_pt * eff_x / 72),
-            'Height_px': int(h_pt * eff_y / 72)
+            'Width_px': w_px,
+            'Height_px': h_px,
+            'Aspect Ratio': ar
         })
-    rows.append({'Template':'[CUSTOM]', 'Width_px':None, 'Height_px':None})
+    # placeholder for customs
+    rows.append({'Template':'[CUSTOM]', 'Width_px':None, 'Height_px':None, 'Aspect Ratio':None})
     df = pd.DataFrame(rows)
-    edited = st.data_editor(df, hide_index=True, num_rows='dynamic', key='map_editor')
+    edited = st.data_editor(df, hide_index=True, num_rows='dynamic', key='map_editor')(df, hide_index=True, num_rows='dynamic', key='map_editor')
     for i, row in edited.iloc[:len(records)].iterrows():
         if pd.notna(row.Width_px) and pd.notna(row.Height_px):
             size_mappings.append((records[i], [int(row.Width_px), int(row.Height_px)], False))
@@ -172,8 +177,9 @@ if (size_mappings or custom_sizes) and image_file:
             top  = max(0, min(top+sy, img_h-h))
             crop = img_orig.crop((left, top, left+w, top+h)).resize((cw, ch), Image.LANCZOS)
             buf = BytesIO(); crop.save(buf, format='PNG'); buf.seek(0)
-            fname = f"custom_{cw}x{ch}.png"
-            zf.writestr(fname, buf.getvalue())
+            label = f"{rec['template']} Custom {cw}x{ch}"
+            fname = f"{label}.png"
+            zf.writestr(fname, buf.getvalue())fname, buf.getvalue())
     zip_buf.seek(0)
     st.download_button('Download Crops', zip_buf.getvalue(), file_name=f'crops_{image_file.name}.zip', mime='application/zip')
 else:
