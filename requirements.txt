@@ -1,3 +1,5 @@
 streamlit>=1.25.0
 pillow>=9.5.0
 pandas>=2.0.0
+opencv-python-headless
+face_recognition
