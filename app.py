@@ -109,7 +109,24 @@ if records:
         h = edited_df.at[j, 'Height_px']
         if pd.notna(w) and pd.notna(h):
             custom_sizes.append((int(w), int(h)))
+    # Recompute Aspect Ratio and Template name for display
+    disp = edited_df.copy()
+    for idx in range(len(disp)):
+        w = disp.at[idx, 'Width_px']; h = disp.at[idx, 'Height_px']
+        if pd.notna(w) and pd.notna(h):
+            disp.at[idx, 'Aspect Ratio'] = round(w / h, 2)
+        else:
+            disp.at[idx, 'Aspect Ratio'] = None
+        if idx >= len(records) and pd.notna(w) and pd.notna(h):
+            # custom row
+            base = records[0].get('template')  # or pick best by ratio
+            disp.at[idx, 'Template'] = f"{base} Custom {int(w)}x{int(h)}"
+    st.subheader('Confirmed Mappings')
+    st.dataframe(disp)
 else:
+    st.info('Upload image & JSON to configure sizes.')
+
+# --- Face Detection ---
     st.info('Upload image & JSON to configure sizes.')
 
 # --- Face Detection ---
