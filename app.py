@@ -36,7 +36,7 @@ custom_sizes = []
 records = []
 if page is not None and doc_data:
     records = [r for r in doc_data if r["page"] == page]
-    # Prefill with frame dimensions (points) and aspect ratio
+    # Prefill table with pt dimensions and aspect ratio
     df_sizes = pd.DataFrame(
         [
             {
@@ -48,7 +48,6 @@ if page is not None and doc_data:
             for rec in records
         ] + [{"Template": "[CUSTOM]", "Width_pt": None, "Height_pt": None, "Aspect": None}]
     )
-    # Let user input desired output pixel sizes for each template or custom
     edited = st.data_editor(
         df_sizes,
         column_order=["Template","Width_pt","Height_pt","Aspect"],
@@ -58,15 +57,13 @@ if page is not None and doc_data:
     )
     for _, row in edited.iterrows():
         tpl = row["Template"]
-        w = row.get("Width_px") or row.get("Width_pt")
-        h = row.get("Height_px") or row.get("Height_pt")
+        # Use pixel or pt as provided; assume users enter pixel values in new columns if needed
+        w = row.get("Width_px") if "Width_px" in row else row.get("Width_pt")
+        h = row.get("Height_px") if "Height_px" in row else row.get("Height_pt")
         if pd.notna(w) and pd.notna(h):
             if tpl == "[CUSTOM]":
                 custom_sizes.append((int(w), int(h)))
             else:
-                size_mappings.append({"template": tpl, "size": [int(w), int(h)]})
-else:
-    st.info("Upload JSON and select a page to define output sizes.")
                 size_mappings.append({"template": tpl, "size": [int(w), int(h)]})
 else:
     st.info("Upload JSON and select a page to define output sizes.")
@@ -80,24 +77,20 @@ if page is not None and image_file and (size_mappings or custom_sizes):
 
     # Prepare crop tasks
     crops_to_generate = []
-    # exact template crops
+    # exact
     for rec in records:
         for m in size_mappings:
             if m["template"] == rec["template"]:
                 crops_to_generate.append((rec, m["size"], False))
-    # custom size crops
+    # custom
     for cw, ch in custom_sizes:
         target_r = cw / ch
-        best = min(
-            records,
-            key=lambda r: abs(r["aspectRatio"] - target_r)
-        )
+        best = min(records, key=lambda r: abs(r["aspectRatio"] - target_r))
         crops_to_generate.append((best, [cw, ch], True))
 
     zip_buffer = BytesIO()
     with zipfile.ZipFile(zip_buffer, "w") as zf:
         for rec, out_size, is_custom in crops_to_generate:
-            # Convert both template & custom via fraction approach
             img_offset = rec["imageOffset"]
             frame = rec["frame"]
             disp_w = img_offset["w"]
@@ -117,7 +110,7 @@ if page is not None and image_file and (size_mappings or custom_sizes):
             target_ratio = out_size[0] / out_size[1]
             current_ratio = w / h if h else target_ratio
 
-            # exact templates: center if mismatch
+            # exact template centering
             if not is_custom and abs(current_ratio - target_ratio) > 1e-3:
                 if current_ratio > target_ratio:
                     new_w = int(h * target_ratio)
@@ -128,7 +121,7 @@ if page is not None and image_file and (size_mappings or custom_sizes):
                     top += (h - new_h) // 2
                     h = new_h
 
-            # custom size: maximal centered region
+            # custom size centering
             if is_custom:
                 new_w = w
                 new_h = int(new_w / target_ratio)
@@ -138,14 +131,14 @@ if page is not None and image_file and (size_mappings or custom_sizes):
                 xc = left + w // 2
                 yc = top + h // 2
                 left = max(0, xc - new_w // 2)
-                top  = max(0, yc - new_h // 2)
+                top = max(0, yc - new_h // 2)
                 w, h = new_w, new_h
 
             # clamp
             left = max(0, min(left, img_w - 1))
-            top  = max(0, min(top, img_h - 1))
-            w    = max(1, min(w, img_w - left))
-            h    = max(1, min(h, img_h - top))
+            top = max(0, min(top, img_h - 1))
+            w = max(1, min(w, img_w - left))
+            h = max(1, min(h, img_h - top))
 
             crop_img = img.crop((left, top, left + w, top + h))
             crop_img = crop_img.resize(tuple(out_size), Image.LANCZOS)
