@@ -26,13 +26,13 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# force sidebar to ~50% width via a tiny bit of CSS
+# force sidebar to fixed 450px width via CSS
 st.markdown(
     """
     <style>
       [data-testid="stSidebar"] {
-        min-width: 50vw;
-        max-width: 50vw;
+        min-width: 450px !important;
+        max-width: 450px !important;
       }
     </style>
     """,
@@ -46,18 +46,20 @@ st.title("Smart Crop Automation Prototype")
 # ——————————————————————————————————————————————————————————
 st.sidebar.header("Inputs")
 json_file = st.sidebar.file_uploader("Upload Cropping Guidelines JSON", type="json")
-image_file = st.sidebar.file_uploader("Upload Master Asset Image", type=["png","jpg","jpeg","tif","tiff"])
+image_file = st.sidebar.file_uploader(
+    "Upload Master Asset Image",
+    type=["png","jpg","jpeg","tif","tiff"]
+)
 
 # Custom sizes editor in sidebar
 with st.sidebar.expander("⚙️ Custom Output Sizes", expanded=True):
-    st.markdown("Add as many extra output dimensions here:")
+    st.markdown("Add extra output dimensions here:")
     custom_df = st.data_editor(
         pd.DataFrame([{"Width_px": None, "Height_px": None}]),
         hide_index=True,
         num_rows="dynamic",
         key="custom_sizes_editor",
     )
-    # extract list of (w,h)
     custom_sizes = [
         (int(r.Width_px), int(r.Height_px))
         for r in custom_df.itertuples()
@@ -76,7 +78,7 @@ if json_file and image_file:
         if spec and (fname == spec or fname.startswith(spec)):
             records.append(rec)
     if not records:
-        st.sidebar.error("Image name not found in JSON file.")
+        st.sidebar.error("Image name not found in JSON.")
 else:
     st.sidebar.info("Please upload both JSON & image.")
 
@@ -122,7 +124,7 @@ if records:
     )
     dets = cascade.detectMultiScale(gray, 1.1, 5, minSize=(30,30))
     face_box = None
-    if dets.any():
+    if len(dets) > 0:
         xs, ys, ws, hs = zip(*dets)
         face_box = {
             "left": min(xs),
@@ -155,10 +157,9 @@ if records:
                 key=lambda r: abs((cw/ch) - r["frame"]["w"]/r["frame"]["h"])
             )
             left, top, w, h = auto_custom_start(rec, img_w, img_h, cw, ch)
-            # optional face‐aware shift here...
             crop = img_orig.crop((left, top, left+w, top+h))
             crop = crop.resize((cw, ch), Image.LANCZOS)
-            label = row.Template.replace("×", "x")  # safe filename
+            label = row.Template.replace("×", "x")
             buf = BytesIO(); crop.save(buf, format="PNG"); buf.seek(0)
             zf.writestr(f"{label}.png", buf.getvalue())
 
@@ -169,5 +170,6 @@ if records:
         file_name=f"crops_{image_file.name}.zip",
         mime="application/zip",
     )
+
 else:
-    st.info("Once you upload JSON + an image, your Output Sizes will appear here.")
+    st.info("Upload JSON + image to see Output Sizes.")
