@@ -119,7 +119,7 @@ if image_file:
 custom_shifts = {}
 if custom_sizes and image_file:
     tabs = st.tabs([f"{cw}×{ch}" for cw,ch in custom_sizes])
-    for (cw, ch), tab in zip(custom_sizes, tabs):
+    for i, ((cw, ch), tab) in enumerate(zip(custom_sizes, tabs)):
         with tab:
             st.write(f"Adjust crop for **{cw}×{ch}**")
             rec = min(records, key=lambda r: abs((cw/ch) - r.get("aspectRatio", r["frame"]["w"]/r["frame"]["h"])))
@@ -141,14 +141,14 @@ if custom_sizes and image_file:
                 min_value=min_x,
                 max_value=max_x,
                 step=1,
-                key=f"shiftx_{cw}_{ch}"
+                key=f"shiftx_{cw}_{ch}_{i}"
             )
             shift_y = st.number_input(
                 "Shift up/down (px)",
                 min_value=min_y,
                 max_value=max_y,
                 step=1,
-                key=f"shifty_{cw}_{ch}"
+                key=f"shifty_{cw}_{ch}_{i}"
             )
 
             # Compute preview crop and show
