@@ -124,32 +124,41 @@ if (size_mappings or custom_sizes) and image_file:
                         nh = int(w/tgt)
                         top += (h-nh)//2; h=nh
 
-                        # Custom: vertical-only nudge (adjust before final clamp)
+                                    # Custom: vertical-only nudge (strict include of faces)
             if is_custom and face_box:
-                # calculate the crop height for ratio
-                target_ratio = out_size[0]/out_size[1]
+                # compute crop height for target ratio
+                target_ratio = out_size[0] / out_size[1]
                 crop_h = int(w / target_ratio)
 
-                # determine vertical center crop origin from original frame
-                base_top = top + (h - crop_h)//2
+                # initial centered top for that height
+                center_top = top + (h - crop_h) // 2
 
-                # nudge vertically to include all faces
-                if face_box["top"] < base_top:
-                    base_top = face_box["top"]
-                if face_box["bottom"] > base_top + crop_h:
-                    base_top = face_box["bottom"] - crop_h
+                # ensure face top inside window
+                if face_box['top'] < center_top:
+                    center_top = face_box['top']
 
-                # apply human slider on nudged position
-                base_top += vertical_shift
+                # ensure face bottom inside window
+                if face_box['bottom'] > center_top + crop_h:
+                    center_top = face_box['bottom'] - crop_h
+
+                # optional margin (10% of crop height)
+                margin = int(0.1 * crop_h)
+                center_top -= margin
+
+                # apply human slider
+                center_top += vertical_shift
 
                 # clamp
-                base_top = max(0, min(base_top, img_h - crop_h))
+                center_top = max(0, min(center_top, img_h - crop_h))
 
-                # update crop window
-                top = base_top
+                top = center_top
                 h = crop_h
 
             # clamp & finalize
+            left = max(0, min(left, img_w - w))
+            top = max(0, min(top, img_h - h))
+            crop = img_orig.crop((left, top, left + w, top + h))
+
             left = max(0, min(left, img_w - w))
             top = max(0, min(top, img_h - h))
             crop = img_orig.crop((left, top, left + w, top + h))
