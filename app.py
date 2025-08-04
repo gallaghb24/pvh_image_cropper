@@ -160,7 +160,7 @@ if custom_sizes and image_file:
             crop_preview = crop_preview.resize((cw, ch), Image.LANCZOS)
             st.image(crop_preview, caption=f"Preview {cw}×{ch}", use_container_width=True)
 
-            custom_shifts[(cw, ch)] = (shift_x, shift_y) (ensure min<=max)
+            custom_shifts[(cw, ch)] = (shift_x, shift_y)
             if min_x > max_x:
                 max_x = min_x
             if min_y > max_y:
