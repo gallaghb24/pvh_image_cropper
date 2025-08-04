@@ -30,50 +30,53 @@ def compute_crop(rec, img_w, img_h):
             h = new_h
     return left, top, w, h
 
-# Stretch for custom boxes
-
-def auto_custom_box(face_box, img_w, img_h, cw, ch):
-    # Full-width ratio crop
-    target = cw / ch
-    crop_h = int(img_w / target)
-    left = 0
-    w = img_w
-    top = max(0, (img_h - crop_h) // 2)
-    h = crop_h
-    # Nudge faces vertically if needed
-    if face_box:
-        if face_box['top'] < top:
-            top = face_box['top']
-        if face_box['bottom'] > top + h:
-            top = face_box['bottom'] - h
-        top = max(0, min(top, img_h - h))
-    return left, top, w, h
+# Custom: initial ratio-based crop
+# then allow manual nudges via sliders
+def auto_custom_start(rec, img_w, img_h, cw, ch):
+    # start from template rec window
+    left, top, w, h = compute_crop(rec, img_w, img_h)
+    tgt = cw / ch
+    new_h = int(w / tgt)
+    top = top + (h - new_h) // 2
+    return left, top, w, new_h
 
 # --- App Setup ---
 st.set_page_config(page_title='CropPack Tester', layout='wide')
 st.title('CropPack Web App Prototype')
 
-# --- Sidebar ---
+# --- Sidebar Inputs ---
 st.sidebar.header('Inputs')
 json_file = st.sidebar.file_uploader('Upload CropPack JSON', type=['json'])
 image_file = st.sidebar.file_uploader('Upload Master Asset Image', type=['png','jpg','jpeg','tif','tiff'])
 st.sidebar.markdown('---')
 
-# --- Page Selection ---
-pages, doc_data = [], []
+# --- Load data ---
+doc_data = []
 if json_file:
     try:
         doc_data = json.load(json_file)
-        pages = sorted({rec['page'] for rec in doc_data})
     except Exception as e:
         st.sidebar.error(f'Invalid JSON: {e}')
-page = st.sidebar.selectbox('Select Page', pages) if pages else None
 
-# --- Size Mapping ---
+# --- Determine records by filename ---
+st.subheader('Detected Asset & Crops')
+records = []
+if doc_data and image_file:
+    fname = image_file.name
+    # match rec['filename'] or rec.get('filename') to uploaded name
+    for rec in doc_data:
+        f = rec.get('filename') or rec.get('fileName') or rec.get('asset') or rec.get('template')
+        if f and (fname == f or fname.startswith(f)):
+            records.append(rec)
+    if not records:
+        st.error('Uploaded image filename not found in JSON. Please ensure the JSON has a matching filename field.')
+else:
+    st.info('Upload both JSON and an image to detect crops.')
+
+# --- Output Sizes Mapping ---
 st.subheader('Output Sizes Mapping')
 size_mappings, custom_sizes = [], []
-if page and doc_data:
-    records = [r for r in doc_data if r['page'] == page]
+if records:
     rows = []
     for rec in records:
         w_pt, h_pt = rec['frame']['w'], rec['frame']['h']
@@ -93,7 +96,7 @@ if page and doc_data:
         if pd.notna(row.Width_px) and pd.notna(row.Height_px):
             custom_sizes.append((int(row.Width_px), int(row.Height_px)))
 else:
-    st.info('Upload JSON and select a page to define sizes.')
+    size_mappings, custom_sizes = [], []
 
 # --- Face Detection ---
 face_box = None
@@ -104,7 +107,7 @@ if image_file:
     gray = cv2.cvtColor(np_img, cv2.COLOR_BGR2GRAY)
     cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
     dets = cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30,30))
-    if len(dets) > 0:
+    if len(dets)>0:
         xs, ys, ws, hs = zip(*dets)
         face_box = {
             'left': min(xs), 'top': min(ys),
@@ -112,54 +115,54 @@ if image_file:
             'bottom': max(y+h for y,h in zip(ys,hs))
         }
 
-# --- Cropping & Export ---
+# --- Manual Nudges Tabs for Custom Sizes ---
+custom_shifts = {}
+if custom_sizes:
+    tabs = st.tabs([f'{cw}×{ch}' for cw,ch in custom_sizes])
+    for (cw, ch), tab in zip(custom_sizes, tabs):
+        with tab:
+            st.write(f'Adjust crop for **{cw}×{ch}**')
+            rec = min(records, key=lambda r: abs((cw/ch) - r.get('aspectRatio', r['frame']['w']/r['frame']['h'])))
+            init_l, init_t, init_w, init_h = auto_custom_start(rec, img_w, img_h, cw, ch)
+            # Horizontal slider
+            min_x = -init_l
+            max_x = img_w - init_l - init_w
+            shift_x = st.slider('Shift left/right', min_x, max_x, 0, key=f'shiftx_{cw}_{ch}')
+            # Vertical slider
+            min_y = -init_t
+            max_y = img_h - init_t - init_h
+            shift_y = st.slider('Shift up/down', min_y, max_y, 0, key=f'shifty_{cw}_{ch}')
+            # Preview
+            crop = img_orig.crop((init_l+shift_x, init_t+shift_y, init_l+shift_x+init_w, init_t+shift_y+init_h))
+            crop = crop.resize((cw, ch), Image.LANCZOS)
+            st.image(crop, caption=f'Preview {cw}×{ch}', use_container_width=True)
+            custom_shifts[(cw, ch)] = (shift_x, shift_y)
+
+# --- Generate & Download ---
 if (size_mappings or custom_sizes) and image_file:
     st.markdown('---')
-    st.header(f'Crops for Page {page}')
-    st.image(img_orig, caption='Master Asset', use_container_width=True)
     zip_buf = BytesIO()
     with zipfile.ZipFile(zip_buf, 'w') as zf:
-                        # Prepare and process all crops
-        tasks = []
-        # Standard template crops
+        # template crops
         for rec, out_size, _ in size_mappings:
-            tasks.append((rec, out_size, False))
-        # Custom crops: match best template for ratio
-        for cw, ch in custom_sizes:
-            target_ratio = cw / ch
-            best = min(
-                [r for r in records],
-                key=lambda r: abs(
-                    r.get("aspectRatio", r["frame"]["w"]/r["frame"]["h"]) - target_ratio
-                )
-            )
-            tasks.append((best, [cw, ch], True))
-
-        # Execute crops
-        for rec, out_size, is_custom in tasks:
-            if not is_custom:
-                left, top, w, h = compute_crop(rec, img_w, img_h)
-            else:
-                # Start from template window
-                left, top, w, h = compute_crop(rec, img_w, img_h)
-                tgt = out_size[0] / out_size[1]
-                new_h = int(w / tgt)
-                top = top + (h - new_h) // 2
-                h = new_h
-                # Manual sliders
-                cw, ch = out_size
-                st.subheader(f'Custom Crop: {cw}×{ch}')
-                min_x = -left
-                max_x = img_w - left - w
-                shift_x = st.slider('Shift left/right', min_x, max_x, 0)
-                min_y = -top
-                max_y = img_h - top - h
-                shift_y = st.slider('Shift up/down', min_y, max_y, 0)
-                left = max(0, min(left + shift_x, img_w - w))
-                top = max(0, min(top + shift_y, img_h - h))
-            crop = img_orig.crop((left, top, left + w, top + h)).resize(tuple(out_size), Image.LANCZOS)
-            if is_custom:
-                st.image(crop, caption=f'Preview {out_size[0]}×{out_size[1]}')
+            left, top, w, h = compute_crop(rec, img_w, img_h)
+            crop = img_orig.crop((left, top, left+w, top+h)).resize(tuple(out_size), Image.LANCZOS)
             buf = BytesIO(); crop.save(buf, format='PNG'); buf.seek(0)
-            label = rec['template'] if not is_custom else f'custom_{out_size[0]}x{out_size[1]}'
-            zf.writestr(f'{label}.png', buf.getvalue())
+            fname = f"{rec['template']}_{out_size[0]}x{out_size[1]}.png"
+            zf.writestr(fname, buf.getvalue())
+        # custom crops with manual shifts
+        for cw, ch in custom_sizes:
+            rec = min(records, key=lambda r: abs((cw/ch) - r.get('aspectRatio', r['frame']['w']/r['frame']['h'])))
+            left, top, w, h = auto_custom_start(rec, img_w, img_h, cw, ch)
+            sx, sy = custom_shifts.get((cw, ch), (0,0))
+            left = max(0, min(left+sx, img_w-w))
+            top  = max(0, min(top+sy, img_h-h))
+            crop = img_orig.crop((left, top, left+w, top+h)).resize((cw, ch), Image.LANCZOS)
+            buf = BytesIO(); crop.save(buf, format='PNG'); buf.seek(0)
+            fname = f"custom_{cw}x{ch}.png"
+            zf.writestr(fname, buf.getvalue())
+    zip_buf.seek(0)
+    st.download_button('Download Crops', zip_buf.getvalue(), file_name=f'crops_{image_file.name}.zip', mime='application/zip')
+else:
+    if image_file:
+        st.warning('Define at least one output size to generate crops.')
