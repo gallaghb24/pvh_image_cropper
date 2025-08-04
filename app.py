@@ -180,17 +180,16 @@ if custom_sizes and image_file:
                 key=f"shifty_{cw}_{ch}"
             )
 
-            # Show preview
-            crop = img_orig.crop((
+                        # Show preview
+            crop_preview = img_orig.crop((
                 init_l + shift_x,
                 init_t + shift_y,
                 init_l + shift_x + init_w,
                 init_t + shift_y + init_h
-            ))[(cw, ch)] = (shift_x, shift_y)
-
-# --- Generate & Download ---[(cw, ch)] = (shift_x, shift_y)
-
-        # --- Generate & Download ---[(cw, ch)] = (shift_x, shift_y)
+            ))
+            crop_preview = crop_preview.resize((cw, ch), Image.LANCZOS)
+            st.image(crop_preview, caption=f"Preview {cw}×{ch}", use_container_width=True)
+            custom_shifts[(cw, ch)] = (shift_x, shift_y)
 
 # --- Generate & Download ---
 if (size_mappings or custom_sizes) and image_file:
