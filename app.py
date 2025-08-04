@@ -144,50 +144,47 @@ if size_mappings or custom_sizes:
                 else:
                     new_h=int(w/target_ratio); top+=(h-new_h)//2; h=new_h
 
-                        # custom: first crop to target ratio, then center + nudge faces
+                                    # custom: nudge the full rec-window first to include faces
             if is_custom:
-                # crop window to exact target ratio
-                if current_ratio > target_ratio:
-                    # too wide, reduce width
-                    crop_w = int(h * target_ratio)
-                    crop_h = h
-                else:
-                    # too tall, reduce height
-                    crop_w = w
-                    crop_h = int(w / target_ratio)
-                # center within original window
-                left += (w - crop_w) // 2
-                top  += (h - crop_h) // 2
-                w, h = crop_w, crop_h
-                # nudge to include faces
+                # original window dims
+                orig_left, orig_top, orig_w, orig_h = left, top, w, h
+                # nudge full window to include faces
                 if face_box:
-                    if face_box["left"] < left:
-                        left = max(0, face_box["left"])
-                    if face_box["right"] > left + w:
-                        left = min(img_w - w, face_box["right"] - w)
-                    if face_box["top"] < top:
-                        top = max(0, face_box["top"])
-                    if face_box["bottom"] > top + h:
-                        top = min(img_h - h, face_box["bottom"] - h)
-                # nudge to include saliency
+                    if face_box["left"] < orig_left:
+                        orig_left = max(0, face_box["left"])
+                    if face_box["right"] > orig_left + orig_w:
+                        orig_left = min(img_w - orig_w, face_box["right"] - orig_w)
+                    if face_box["top"] < orig_top:
+                        orig_top = max(0, face_box["top"])
+                    if face_box["bottom"] > orig_top + orig_h:
+                        orig_top = min(img_h - orig_h, face_box["bottom"] - orig_h)
+                # nudge for saliency
                 if sal_box:
-                    if sal_box["left"] < left:
-                        left = max(0, sal_box["left"])
-                    if sal_box["right"] > left + w:
-                        left = min(img_w - w, sal_box["right"] - w)
-                    if sal_box["top"] < top:
-                        top = max(0, sal_box["top"])
-                    if sal_box["bottom"] > top + h:
-                        top = min(img_h - h, sal_box["bottom"] - h)
-                # clamp to bounds
-                left = max(0, min(left, img_w - w))
-                top  = max(0, min(top, img_h - h))
+                    if sal_box["left"] < orig_left:
+                        orig_left = max(0, sal_box["left"])
+                    if sal_box["right"] > orig_left + orig_w:
+                        orig_left = min(img_w - orig_w, sal_box["right"] - orig_w)
+                    if sal_box["top"] < orig_top:
+                        orig_top = max(0, sal_box["top"])
+                    if sal_box["bottom"] > orig_top + orig_h:
+                        orig_top = min(img_h - orig_h, sal_box["bottom"] - orig_h)
+                # now center-crop this nudged window to exact target ratio
+                if orig_w / orig_h > target_ratio:
+                    # window too wide -> trim width
+                    crop_w = int(orig_h * target_ratio)
+                    crop_h = orig_h
+                else:
+                    # window too tall -> trim height
+                    crop_w = orig_w
+                    crop_h = int(orig_w / target_ratio)
+                left = orig_left + (orig_w - crop_w)//2
+                top  = orig_top  + (orig_h - crop_h)//2
+                w, h = crop_w, crop_h
             # clamp & crop
-            left = max(0, min(left, img_w - 1))
-            top = max(0, min(top, img_h - 1))
-            w = max(1, min(w, img_w - left))
-            h = max(1, min(h, img_h - top))
+            left = max(0, min(left, img_w - w))
+            top  = max(0, min(top, img_h - h))
             crop = img.crop((left, top, left + w, top + h))
+((left, top, left + w, top + h))
             # resize ALL crops to the requested output size
             crop = crop.resize(tuple(out_size), Image.LANCZOS)
             left=max(0,min(left,img_w-1)); top=max(0,min(top,img_h-1))
