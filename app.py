@@ -126,14 +126,19 @@ if (size_mappings or custom_sizes) and image_file:
             crop = img_orig.crop((left, top, left+w, top+h)).resize(tuple(out_size), Image.LANCZOS)
             buf = BytesIO(); crop.save(buf, format='PNG'); buf.seek(0)
             zf.writestr(f"{rec['template']}_{out_size[0]}x{out_size[1]}.png", buf.getvalue())
-                # Canvas-assisted custom crops
+                        # Canvas-assisted custom crops
         for cw, ch in custom_sizes:
             st.subheader(f'Custom Crop: {cw}×{ch}')
             init_l, init_t, init_w, init_h = auto_custom_box(face_box, img_w, img_h, cw, ch)
-            # Launch drawable canvas with PIL image directly as background
+            # encode image as base64 data URI
+            buf = BytesIO()
+            img_orig.save(buf, format='PNG')
+            b64 = base64.b64encode(buf.getvalue()).decode()
+            bg_url = f"data:image/png;base64,{b64}"
+            # launch drawable canvas with URL
             canvas_data = st_canvas(
                 fill_color='', stroke_width=2,
-                background_image=img_orig,
+                background_image_url=bg_url,
                 width=img_w, height=img_h,
                 initial_drawing=[{'type':'rect','x':init_l,'y':init_t,'width':init_w,'height':init_h,'strokeColor':'#00FF00'}],
                 drawing_mode='transform'
