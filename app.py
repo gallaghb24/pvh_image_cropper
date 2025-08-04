@@ -64,33 +64,36 @@ if page is not None and image_file and (size_mappings or custom_sizes):
                 crops_to_generate.append((rec, m["size"], False))
     for cw, ch in custom_sizes:
         target_r = cw / ch
-        best = min(
-            records,
-            key=lambda r: abs(r["aspectRatio"] - target_r)
-        )
+        best = min(records, key=lambda r: abs(r["aspectRatio"] - target_r))
         crops_to_generate.append((best, [cw, ch], True))
 
     zip_buffer = BytesIO()
     with zipfile.ZipFile(zip_buffer, "w") as zf:
         for rec, out_size, is_custom in crops_to_generate:
-            # Convert InDesign pts -> pixels using effective PPI
-            ox_pt = rec["imageOffset"]["x"]
-            oy_pt = rec["imageOffset"]["y"]
-            ow_pt = rec["imageOffset"]["w"]
-            oh_pt = rec["imageOffset"]["h"]
-            eff_x = rec["effectivePpi"]["x"]
-            eff_y = rec["effectivePpi"]["y"]
-            ox_px = int(ox_pt * eff_x / 72)
-            oy_px = int(oy_pt * eff_y / 72)
-            ow_px = int(ow_pt * eff_x / 72)
-            oh_px = int(oh_pt * eff_y / 72)
+            # Compute fraction of original image shown
+            img_offset = rec["imageOffset"]
+            frame = rec["frame"]
+            # displayed image size in pts
+            disp_w = img_offset["w"]
+            disp_h = img_offset["h"]
+            # offset of visible window within displayed image
+            off_x = abs(img_offset["x"])
+            off_y = abs(img_offset["y"])
+            # fraction
+            frac_x = off_x / disp_w
+            frac_y = off_y / disp_h
+            frac_w = frame["w"] / disp_w
+            frac_h = frame["h"] / disp_h
+            # compute pixel coords on original high-res
+            ox_px = int(frac_x * img_w)
+            oy_px = int(frac_y * img_h)
+            ow_px = int(frac_w * img_w)
+            oh_px = int(frac_h * img_h)
 
-            # Define base region
             left, top, w, h = ox_px, oy_px, ow_px, oh_px
             target_ratio = out_size[0] / out_size[1]
             current_ratio = w / h if h else target_ratio
-
-            # Center for exact templates if ratio mismatch
+            # exact
             if not is_custom and abs(current_ratio - target_ratio) > 1e-3:
                 if current_ratio > target_ratio:
                     new_w = int(h * target_ratio)
@@ -100,8 +103,7 @@ if page is not None and image_file and (size_mappings or custom_sizes):
                     new_h = int(w / target_ratio)
                     top += (h - new_h) // 2
                     h = new_h
-
-            # Center for custom sizes
+            # custom
             if is_custom:
                 new_w = w
                 new_h = int(new_w / target_ratio)
@@ -114,13 +116,12 @@ if page is not None and image_file and (size_mappings or custom_sizes):
                 top = max(0, yc - new_h // 2)
                 w, h = new_w, new_h
 
-            # Clamp
-            left = max(0, min(left, img_w - 1))
-            top  = max(0, min(top, img_h - 1))
-            w    = max(1, min(w, img_w - left))
-            h    = max(1, min(h, img_h - top))
-
-            crop_img = img.crop((left, top, left + w, top + h))
+            # clamp and crop
+            left = max(0, min(left, img_w-1))
+            top  = max(0, min(top, img_h-1))
+            w    = max(1, min(w, img_w-left))
+            h    = max(1, min(h, img_h-top))
+            crop_img = img.crop((left, top, left+w, top+h))
             crop_img = crop_img.resize(tuple(out_size), Image.LANCZOS)
 
             tpl_label = rec["template"] + ("_custom" if is_custom else "")
