@@ -125,33 +125,30 @@ if custom_sizes:
             base = min(records, key=lambda r: abs((cw / ch) - r["frame"]["w"] / r["frame"]["h"]))
             l0, t0, wb, hb = auto_custom_start(base, iw, ih, cw, ch)
 
-            # Zoom control
+            # Calculate default zoom and offset
             z_key = f"zoom_{idx}"; st.session_state.setdefault(z_key, 0)
-            colz1, colz2 = st.columns([3, 1])
-            with colz1:
-                zd = st.slider("Zoom ±10%", -10, 10, st.session_state[z_key], 1, key=f"zslider_{idx}")
-            with colz2:
-                zd = st.number_input("Zoom%", -10, 10, zd, 1, key=f"znum_{idx}", label_visibility="collapsed")
-            st.session_state[z_key] = zd
-            zoom = 1 + zd / 100
+            sx_key = f"sx_{idx}"; st.session_state.setdefault(sx_key, 0)
+            sy_key = f"sy_{idx}"; st.session_state.setdefault(sy_key, 0)
 
+            # Calculate crop window before adjustments
+            zoom = 1 + st.session_state[z_key] / 100
             wz, hz = int(wb / zoom), int(hb / zoom)
             cx, cy = l0 + wb // 2, t0 + hb // 2
             left_start, top_start = cx - wz // 2, cy - hz // 2
             min_x, max_x = -left_start, iw - left_start - wz
             min_y, max_y = -top_start, ih - top_start - hz
 
-            # Width offset
-            sx_key = f"sx_{idx}"; st.session_state.setdefault(sx_key, 0)
-            colw1, colw2 = st.columns([3, 1])
-            with colw1:
-                sx = 0 if min_x == max_x else st.slider("Width Offset", min_x, max_x, st.session_state[sx_key], 1, key=f"sxslider_{idx}")
-            with colw2:
-                sx = st.number_input("Width", min_x, max_x, sx, 1, key=f"sxnum_{idx}", label_visibility="collapsed")
-            st.session_state[sx_key] = sx
+            # Use session values for offset and zoom
+            sx = st.session_state[sx_key]
+            sy = st.session_state[sy_key]
+            zd = st.session_state[z_key]
 
-            # Height offset
-            sy_key = f"sy_{idx}"; st.session_state.setdefault(sy_key, 0)
+            # Preview before sliders
+            x0, y0 = left_start + sx, top_start + sy
+            prev = img.crop((x0, y0, x0 + wz, y0 + hz)).resize((cw, ch))
+            st.image(prev, caption=f"Preview {cw}×{ch}", width=600)
+
+            # Height offset sliders
             colh1, colh2 = st.columns([3, 1])
             if min_y == max_y:
                 with colh1:
@@ -165,12 +162,24 @@ if custom_sizes:
                     sy = st.number_input("Height", min_y, max_y, sy, 1, key=f"synum_{idx}", label_visibility="collapsed")
             st.session_state[sy_key] = sy
 
-            # Preview
-            x0, y0 = left_start + sx, top_start + sy
-            prev = img.crop((x0, y0, x0 + wz, y0 + hz)).resize((cw, ch))
-            st.image(prev, caption=f"Preview {cw}×{ch}", width=600)
+            # Width offset sliders
+            colw1, colw2 = st.columns([3, 1])
+            with colw1:
+                sx = 0 if min_x == max_x else st.slider("Width Offset", min_x, max_x, st.session_state[sx_key], 1, key=f"sxslider_{idx}")
+            with colw2:
+                sx = st.number_input("Width", min_x, max_x, sx, 1, key=f"sxnum_{idx}", label_visibility="collapsed")
+            st.session_state[sx_key] = sx
 
-            shifts[(cw, ch)] = (sx, sy, zoom)
+            # Zoom control sliders (always last)
+            colz1, colz2 = st.columns([3, 1])
+            with colz1:
+                zd = st.slider("Zoom ±10%", -10, 10, st.session_state[z_key], 1, key=f"zslider_{idx}")
+            with colz2:
+                zd = st.number_input("Zoom%", -10, 10, zd, 1, key=f"znum_{idx}", label_visibility="collapsed")
+            st.session_state[z_key] = zd
+
+            # Save for ZIP generation
+            shifts[(cw, ch)] = (sx, sy, 1 + zd / 100)
 
 # ——————————————————————————————————————————————————————————
 # Generate ZIP
