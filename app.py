@@ -35,31 +35,48 @@ size_mappings = []
 custom_sizes = []
 records = []
 if page is not None and doc_data:
+    # filter records for selected page
     records = [r for r in doc_data if r["page"] == page]
-    # Prefill table with pt dimensions and aspect ratio
-    df_sizes = pd.DataFrame(
-        [
-            {
-                "Template": rec["template"],
-                "Width_pt": rec["frame"]["w"],
-                "Height_pt": rec["frame"]["h"],
-                "Aspect": rec.get("aspectRatio")
-            }
-            for rec in records
-        ] + [{"Template": "[CUSTOM]", "Width_pt": None, "Height_pt": None, "Aspect": None}]
-    )
+    # build DataFrame with both pt and px dims + aspect
+    df_rows = []
+    for rec in records:
+        w_pt = rec["frame"]["w"]
+        h_pt = rec["frame"]["h"]
+        eff_x = rec["effectivePpi"]["x"]
+        eff_y = rec["effectivePpi"]["y"]
+        # convert pts to pixels
+        w_px = int(w_pt * eff_x / 72)
+        h_px = int(h_pt * eff_y / 72)
+        df_rows.append({
+            "Template": rec["template"],
+            "Width_pt": w_pt,
+            "Height_pt": h_pt,
+            "Width_px": w_px,
+            "Height_px": h_px,
+            "Aspect": rec.get("aspectRatio")
+        })
+    # add custom row
+    df_rows.append({"Template": "[CUSTOM]", "Width_pt": None, "Height_pt": None, "Width_px": None, "Height_px": None, "Aspect": None})
+    df_sizes = pd.DataFrame(df_rows)
     edited = st.data_editor(
         df_sizes,
-        column_order=["Template","Width_pt","Height_pt","Aspect"],
+        column_config={
+            "Template": st.column_config.TextColumn("Template"),
+            "Width_pt": st.column_config.NumberColumn("Width (pt)", format="%.2f"),
+            "Height_pt": st.column_config.NumberColumn("Height (pt)", format="%.2f"),
+            "Width_px": st.column_config.NumberColumn("Width (px)"),
+            "Height_px": st.column_config.NumberColumn("Height (px)"),
+            "Aspect": st.column_config.NumberColumn("Aspect Ratio", format="%.2f")
+        },
         hide_index=True,
         key="size_editor",
         num_rows="dynamic"
     )
+    # extract mappings
     for _, row in edited.iterrows():
         tpl = row["Template"]
-        # Use pixel or pt as provided; assume users enter pixel values in new columns if needed
-        w = row.get("Width_px") if "Width_px" in row else row.get("Width_pt")
-        h = row.get("Height_px") if "Height_px" in row else row.get("Height_pt")
+        w = row.get("Width_px") or row.get("Width_pt")
+        h = row.get("Height_px") or row.get("Height_pt")
         if pd.notna(w) and pd.notna(h):
             if tpl == "[CUSTOM]":
                 custom_sizes.append((int(w), int(h)))
@@ -77,12 +94,10 @@ if page is not None and image_file and (size_mappings or custom_sizes):
 
     # Prepare crop tasks
     crops_to_generate = []
-    # exact
     for rec in records:
         for m in size_mappings:
             if m["template"] == rec["template"]:
                 crops_to_generate.append((rec, m["size"], False))
-    # custom
     for cw, ch in custom_sizes:
         target_r = cw / ch
         best = min(records, key=lambda r: abs(r["aspectRatio"] - target_r))
