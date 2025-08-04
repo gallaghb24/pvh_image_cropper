@@ -46,7 +46,7 @@ st.title('Smart Crop Automation Prototype')
 
 # --- Sidebar Inputs ---
 st.sidebar.header('Inputs')
-json_file = st.sidebar.file_uploader('Upload CropPack JSON', type=['json'])
+json_file = st.sidebar.file_uploader('Upload Cropping Guidelines JSON', type=['json'])
 image_file = st.sidebar.file_uploader('Upload Master Asset Image', type=['png','jpg','jpeg','tif','tiff'])
 st.sidebar.markdown('---')
 
