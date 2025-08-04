@@ -119,45 +119,47 @@ if (size_mappings or custom_sizes) and image_file:
     st.image(img_orig, caption='Master Asset', use_container_width=True)
     zip_buf = BytesIO()
     with zipfile.ZipFile(zip_buf, 'w') as zf:
-                # Combined loop: template + custom
-        all_tasks = size_mappings + [(r,s,True) for r,s in custom_sizes]
-        for rec, out_size, is_custom in all_tasks:
+                        # Prepare and process all crops
+        tasks = []
+        # Standard template crops
+        for rec, out_size, _ in size_mappings:
+            tasks.append((rec, out_size, False))
+        # Custom crops: match best template for ratio
+        for cw, ch in custom_sizes:
+            target_ratio = cw / ch
+            best = min(
+                [r for r in records],
+                key=lambda r: abs(
+                    r.get("aspectRatio", r["frame"]["w"]/r["frame"]["h"]) - target_ratio
+                )
+            )
+            tasks.append((best, [cw, ch], True))
+
+        # Execute crops
+        for rec, out_size, is_custom in tasks:
             if not is_custom:
-                # standard template crop
                 left, top, w, h = compute_crop(rec, img_w, img_h)
             else:
-                # custom: start from template rec window, then ratio-fit to width
+                # Start from template window
                 left, top, w, h = compute_crop(rec, img_w, img_h)
                 tgt = out_size[0] / out_size[1]
-                # compute new height from current width
                 new_h = int(w / tgt)
-                # center vertically within original
-                top = top + (h - new_h)//2
+                top = top + (h - new_h) // 2
                 h = new_h
-                # sliders for manual nudge
-                st.subheader(f'Custom Crop: {out_size[0]}×{out_size[1]}')
-                # horizontal shift range
+                # Manual sliders
+                cw, ch = out_size
+                st.subheader(f'Custom Crop: {cw}×{ch}')
                 min_x = -left
-                max_x = img_w - (left + w)
+                max_x = img_w - left - w
                 shift_x = st.slider('Shift left/right', min_x, max_x, 0)
-                # vertical shift range
                 min_y = -top
-                max_y = img_h - (top + h)
+                max_y = img_h - top - h
                 shift_y = st.slider('Shift up/down', min_y, max_y, 0)
-                # apply shifts
                 left = max(0, min(left + shift_x, img_w - w))
-                top  = max(0, min(top + shift_y, img_h - h))
-            # Crop & resize
+                top = max(0, min(top + shift_y, img_h - h))
             crop = img_orig.crop((left, top, left + w, top + h)).resize(tuple(out_size), Image.LANCZOS)
-            crop = img_orig.crop((left, top, left+w, top+h)).resize(tuple(out_size), Image.LANCZOS)
-            # Preview custom
             if is_custom:
                 st.image(crop, caption=f'Preview {out_size[0]}×{out_size[1]}')
             buf = BytesIO(); crop.save(buf, format='PNG'); buf.seek(0)
             label = rec['template'] if not is_custom else f'custom_{out_size[0]}x{out_size[1]}'
             zf.writestr(f'{label}.png', buf.getvalue())
-    zip_buf.seek(0)
-    st.download_button('Download Crops', zip_buf.getvalue(), file_name=f'crops_page_{page}.zip', mime='application/zip')
-else:
-    if page:
-        st.warning('Define sizes and upload an image to generate crops.')
