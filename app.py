@@ -4,6 +4,9 @@ import json
 import pandas as pd
 from io import BytesIO
 import zipfile
+import numpy as np
+import cv2
+import face_recognition
 
 st.set_page_config(page_title="CropPack Tester", layout="wide")
 st.title("CropPack Web App Prototype")
@@ -24,7 +27,6 @@ if json_file:
         pages = sorted({rec["page"] for rec in doc_data})
     except Exception as e:
         st.sidebar.error(f"Invalid JSON: {e}")
-
 page = None
 if pages:
     page = st.sidebar.selectbox("Select Page", pages)
@@ -35,20 +37,33 @@ size_mappings = []
 custom_sizes = []
 records = []
 
-if page is not None and doc_data:
+if page is not None and doc_data and image_file:
     # Filter records for selected page
     records = [r for r in doc_data if r["page"] == page]
-
-    # Find master asset to get consistent PPI
-    master = next((r for r in records if r["template"] == "Master Asset"), None)
-    if master:
-        master_eff_x = master["effectivePpi"]["x"]
-        master_eff_y = master["effectivePpi"]["y"]
+    # Detect faces & saliency on master asset
+    img = Image.open(image_file)
+    img_w, img_h = img.size
+    np_img = np.array(img)
+    # Face detection
+    face_locs = face_recognition.face_locations(np_img, model="hog")
+    if face_locs:
+        tops, rights, bottoms, lefts = zip(*face_locs)
+        face_box = {"left": min(lefts), "top": min(tops), "right": max(rights), "bottom": max(bottoms)}
     else:
-        st.error("No Master Asset found on this page.")
-        st.stop()
+        face_box = None
+    # Saliency detection
+    sal = cv2.saliency.StaticSaliencySpectralResidual_create()
+    (success, salmap) = sal.computeSaliency(np_img)
+    salmap = (salmap * 255).astype(np.uint8)
+    _, mask = cv2.threshold(salmap, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
+    cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if cnts:
+        x,y,w_s,h_s = max(cnts, key=lambda c: cv2.contourArea(c)).squeeze()
+        sal_box = {"left": x, "top": y, "right": x+w_s, "bottom": y+h_s}
+    else:
+        sal_box = None
 
-    # Build DataFrame rows
+    # Prepare size mapping table
     df_rows = []
     for rec in records:
         w_pt = rec["frame"]["w"]
@@ -59,21 +74,12 @@ if page is not None and doc_data:
         h_px = int(h_pt * eff_y / 72)
         df_rows.append({
             "Template": rec["template"],
-            "Width_pt": w_pt,
-            "Height_pt": h_pt,
-            "Width_px": w_px,
-            "Height_px": h_px,
+            "Width_pt": w_pt, "Height_pt": h_pt,
+            "Width_px": w_px, "Height_px": h_px,
             "Aspect": rec.get("aspectRatio")
         })
-    # Append custom row
-    df_rows.append({
-        "Template": "[CUSTOM]",
-        "Width_pt": None,
-        "Height_pt": None,
-        "Width_px": None,
-        "Height_px": None,
-        "Aspect": None
-    })
+    # Custom row
+    df_rows.append({"Template":"[CUSTOM]","Width_pt":None,"Height_pt":None,"Width_px":None,"Height_px":None,"Aspect":None})
 
     df_sizes = pd.DataFrame(df_rows)
     edited = st.data_editor(
@@ -91,107 +97,85 @@ if page is not None and doc_data:
         num_rows="dynamic"
     )
 
-    # Map size editor rows to crops
+    # Map rows to crop tasks
     for idx, row in edited.iloc[:len(records)].iterrows():
         tpl = row["Template"]
         w = row["Width_px"]
         h = row["Height_px"]
         if pd.notna(w) and pd.notna(h):
             size_mappings.append((records[idx], [int(w), int(h)], False))
-
-    # Custom sizes
     for _, row in edited.iloc[len(records):].iterrows():
         w = row["Width_px"]
         h = row["Height_px"]
         if pd.notna(w) and pd.notna(h):
             custom_sizes.append((int(w), int(h)))
 else:
-    st.info("Upload JSON and select a page to define output sizes.")
+    st.info("Upload JSON, image, and select a page to begin.")
 
 # --- Main: Crop Download ---
-if page is not None and image_file and (size_mappings or custom_sizes):
+if size_mappings or custom_sizes:
     st.markdown("---")
     st.header(f"Crops for Page {page}")
-    img = Image.open(image_file)
-    img_w, img_h = img.size
-
-    # Combine exact + custom tasks
-    crops_to_generate = size_mappings.copy()
-    for cw, ch in custom_sizes:
-        target_r = cw / ch
-        best = min(records, key=lambda r: abs(r["aspectRatio"] - target_r))
-        crops_to_generate.append((best, [cw, ch], True))
-
     zip_buffer = BytesIO()
     with zipfile.ZipFile(zip_buffer, "w") as zf:
-        for rec, out_size, is_custom in crops_to_generate:
+        tasks = size_mappings.copy()
+        # custom tasks
+        for cw,ch in custom_sizes:
+            target_r = cw / ch
+            best = min(records, key=lambda r: abs(r["aspectRatio"] - target_r))
+            tasks.append((best, [cw,ch], True))
+        for rec,out_size,is_custom in tasks:
             img_offset = rec["imageOffset"]
             frame = rec["frame"]
-            disp_w = img_offset["w"]
-            disp_h = img_offset["h"]
-            off_x = abs(img_offset["x"])
-            off_y = abs(img_offset["y"])
-            frac_x = off_x / disp_w
-            frac_y = off_y / disp_h
-            frac_w = frame["w"] / disp_w
-            frac_h = frame["h"] / disp_h
-
-            ox_px = int(frac_x * img_w)
-            oy_px = int(frac_y * img_h)
-            ow_px = int(frac_w * img_w)
-            oh_px = int(frac_h * img_h)
-
-            left, top, w, h = ox_px, oy_px, ow_px, oh_px
-            target_ratio = out_size[0] / out_size[1]
-            current_ratio = w / h if h else target_ratio
-
-            # Center exact templates
-            if not is_custom and abs(current_ratio - target_ratio) > 1e-3:
-                if current_ratio > target_ratio:
-                    new_w = int(h * target_ratio)
-                    left += (w - new_w) // 2
-                    w = new_w
+            disp_w = img_offset["w"]; disp_h = img_offset["h"]
+            off_x = abs(img_offset["x"]); off_y = abs(img_offset["y"])
+            frac_x = off_x/disp_w; frac_y = off_y/disp_h
+            frac_w = frame["w"]/disp_w; frac_h = frame["h"]/disp_h
+            img = Image.open(image_file)
+            img_w, img_h = img.size
+            left = int(frac_x*img_w); top = int(frac_y*img_h)
+            w = int(frac_w*img_w); h = int(frac_h*img_h)
+            target_ratio = out_size[0]/out_size[1]
+            current_ratio = w/h if h else target_ratio
+            # center exact
+            if not is_custom and abs(current_ratio-target_ratio)>1e-3:
+                if current_ratio>target_ratio:
+                    new_w = int(h*target_ratio)
+                    left += (w-new_w)//2; w=new_w
                 else:
-                    new_h = int(w / target_ratio)
-                    top += (h - new_h) // 2
-                    h = new_h
-
-            # Center custom sizes
+                    new_h = int(w/target_ratio)
+                    top += (h-new_h)//2; h=new_h
+            # custom: center + nudge faces + saliency
             if is_custom:
-                new_w = w
-                new_h = int(new_w / target_ratio)
-                if new_h > h:
-                    new_h = h
-                    new_w = int(new_h * target_ratio)
-                xc = left + w // 2
-                yc = top + h // 2
-                left = max(0, xc - new_w // 2)
-                top = max(0, yc - new_h // 2)
-                w, h = new_w, new_h
-
-            # Clamp & crop
-            left = max(0, min(left, img_w - 1))
-            top = max(0, min(top, img_h - 1))
-            w = max(1, min(w, img_w - left))
-            h = max(1, min(h, img_h - top))
-
-            crop_img = img.crop((left, top, left + w, top + h))
-            crop_img = crop_img.resize(tuple(out_size), Image.LANCZOS)
-
-            tpl_label = rec["template"] + ("_custom" if is_custom else "")
-            img_bytes = BytesIO()
-            crop_img.save(img_bytes, format="PNG")
-            img_bytes.seek(0)
-            fname = f"{tpl_label}_{out_size[0]}x{out_size[1]}.png"
-            zf.writestr(fname, img_bytes.getvalue())
-
+                # initial center
+                new_w,new_h = w,h
+                xc = left + w//2; yc = top + h//2
+                left = max(0, xc-new_w//2); top = max(0, yc-new_h//2)
+                # include faces
+                if face_box:
+                    if face_box["left"]<left: left = max(0, face_box["left"])
+                    if face_box["right"]>left+new_w: left = min(img_w-new_w, face_box["right"]-new_w)
+                    if face_box["top"]<top: top = max(0, face_box["top"])
+                    if face_box["bottom"]>top+new_h: top = min(img_h-new_h, face_box["bottom"]-new_h)
+                # include saliency
+                if sal_box:
+                    if sal_box["left"]<left: left = max(0, sal_box["left"])
+                    if sal_box["right"]>left+new_w: left = min(img_w-new_w, sal_box["right"]-new_w)
+                    if sal_box["top"]<top: top = max(0, sal_box["top"])
+                    if sal_box["bottom"]>top+new_h: top = min(img_h-new_h, sal_box["bottom"]-new_h)
+                # clamp
+                left = max(0, min(left, img_w-new_w)); top = max(0, min(top, img_h-new_h))
+                w,h = new_w,new_h
+            # clamp & finalize
+            left = max(0,min(left,img_w-1)); top = max(0,min(top,img_h-1))
+            w = max(1,min(w,img_w-left)); h = max(1,min(h,img_h-top))
+            crop = img.crop((left,top,left+w,top+h))
+            crop = crop.resize(tuple(out_size),Image.LANCZOS)
+            buf = BytesIO(); crop.save(buf,format="PNG"); buf.seek(0)
+            fname = f"{rec['template']}_{out_size[0]}x{out_size[1]}.png"
+            zf.writestr(fname,buf.getvalue())
     zip_buffer.seek(0)
-    st.download_button(
-        "Download Crops",
-        data=zip_buffer.getvalue(),
-        file_name=f"page_{page}_crops.zip",
-        mime="application/zip",
-    )
+    st.download_button("Download Crops", zip_buffer.getvalue(), file_name=f"page_{page}_crops.zip", mime="application/zip")
 else:
     if page is not None:
-        st.warning("Please upload an image and define at least one size.")
+        st.warning("Define at least one size and upload an image to generate crops.")
