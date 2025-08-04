@@ -145,4 +145,6 @@ def auto_custom_box(face_box, img_w, img_h, cw, ch):
     if face_box:
         if face_box['top']<top: top=face_box['top']
         if face_box['bottom']>top+h: top=face_box['bottom']-h
-        top=max(0, min(top, img_h-h
+        top = max(0, min(top, img_h - h))
+
+    return left, top, w, h
