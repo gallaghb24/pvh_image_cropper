@@ -34,17 +34,26 @@ st.subheader("Output Sizes Mapping")
 size_mappings, custom_sizes, records = [], [], []
 if page is not None and doc_data:
     records = [r for r in doc_data if r["page"] == page]
+    # Build DataFrame prefilled with pixel dims (pts → px via effective PPI)
     df_sizes = pd.DataFrame([
-        {"Template": r["template"], "Width": r["frame"]["w"], "Height": r["frame"]["h"]}
-        for r in records
+        {
+            "Template": rec["template"],
+            "Width": int(rec["frame"]["w"] * rec["effectivePpi"]["x"] / 72),
+            "Height": int(rec["frame"]["h"] * rec["effectivePpi"]["y"] / 72)
+        }
+        for rec in records
     ] + [{"Template": "[CUSTOM]", "Width": None, "Height": None}])
     edited = st.data_editor(df_sizes, key="size_editor", num_rows="dynamic")
-    for _, row in edited.iterrows():
+    for idx, row in edited.iterrows():
         tpl, w, h = row["Template"], row["Width"], row["Height"]
         if pd.notna(w) and pd.notna(h):
+            # For duplicates, each row maps separately
             if tpl == "[CUSTOM]":
                 custom_sizes.append((int(w), int(h)))
             else:
+                size_mappings.append({"template": tpl, "size": [int(w), int(h)]})
+else:
+    st.info("Upload JSON and select a page to define output sizes.")
                 size_mappings.append({"template": tpl, "size": [int(w), int(h)]})
 else:
     st.info("Upload JSON and select a page to define output sizes.")
