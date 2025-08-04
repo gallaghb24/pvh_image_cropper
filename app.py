@@ -35,6 +35,31 @@ def auto_custom_start(rec: dict, img_w: int, img_h: int, cw: int, ch: int) -> Tu
     t += (h - new_h) // 2
     return l, t, w, new_h
 
+def adjust_crop_to_include_face(l, t, w, h, face_box, iw, ih):
+    """Shift crop window minimally so the face box fits inside (if possible)."""
+    if face_box is None:
+        return l, t, w, h
+    fx1, fy1, fx2, fy2 = face_box
+    crop_x1, crop_y1, crop_x2, crop_y2 = l, t, l + w, t + h
+    # If face is already fully inside crop, no change needed
+    if (fx1 >= crop_x1 and fx2 <= crop_x2 and
+        fy1 >= crop_y1 and fy2 <= crop_y2):
+        return l, t, w, h
+    # Compute needed shifts (separately for x and y)
+    shift_x, shift_y = 0, 0
+    if fx1 < crop_x1:
+        shift_x = fx1 - crop_x1
+    elif fx2 > crop_x2:
+        shift_x = fx2 - crop_x2
+    if fy1 < crop_y1:
+        shift_y = fy1 - crop_y1
+    elif fy2 > crop_y2:
+        shift_y = fy2 - crop_y2
+    # Apply shifts but don't go out of image bounds
+    new_l = min(max(l + shift_x, 0), iw - w)
+    new_t = min(max(t + shift_y, 0), ih - h)
+    return new_l, new_t, w, h
+
 # ——————————————————————————————————————————————————————————
 # Streamlit page config
 # ——————————————————————————————————————————————————————————
@@ -108,13 +133,26 @@ for cw, ch in custom_sizes:
 st.dataframe(pd.DataFrame(ctable), use_container_width=True)
 
 # ——————————————————————————————————————————————————————————
-# Load master image
+# Load master image + FACE DETECTION (OpenCV)
 # ——————————————————————————————————————————————————————————
 img = Image.open(image_file)
 iw, ih = img.size
 
+# Face detection (run once, pick largest face if present)
+import cv2
+import numpy as np
+img_cv = np.array(img.convert("RGB"))
+gray = cv2.cvtColor(img_cv, cv2.COLOR_RGB2GRAY)
+casc = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+faces = casc.detectMultiScale(gray, 1.1, 5, minSize=(30,30))
+if len(faces) > 0:
+    x, y, w, h = max(faces, key=lambda f: f[2]*f[3])
+    face_box = (x, y, x + w, y + h)
+else:
+    face_box = None
+
 # ——————————————————————————————————————————————————————————
-# Custom adjustment UI
+# Custom adjustment UI (face-aware)
 # ——————————————————————————————————————————————————————————
 shifts = {}
 if custom_sizes:
@@ -124,6 +162,8 @@ if custom_sizes:
         with tab:
             base = min(records, key=lambda r: abs((cw / ch) - r["frame"]["w"] / r["frame"]["h"]))
             l0, t0, wb, hb = auto_custom_start(base, iw, ih, cw, ch)
+            # --- FACE-AWARE: shift default window if needed
+            l0, t0, wb, hb = adjust_crop_to_include_face(l0, t0, wb, hb, face_box, iw, ih)
 
             # Calculate default zoom and offset
             z_key = f"zoom_{idx}"; st.session_state.setdefault(z_key, 0)
@@ -199,6 +239,8 @@ with zipfile.ZipFile(zip_buf, "w") as zf:
     for cw, ch in custom_sizes:
         base = min(records, key=lambda r: abs((cw / ch) - r["frame"]["w"] / r["frame"]["h"]))
         l, t, wb, hb = auto_custom_start(base, iw, ih, cw, ch)
+        # (OPTIONAL: apply face adjust for export too by uncommenting below)
+        # l, t, wb, hb = adjust_crop_to_include_face(l, t, wb, hb, face_box, iw, ih)
         sx, sy, zoom = shifts.get((cw, ch), (0, 0, 1))
         wz, hz = int(wb / zoom), int(hb / zoom)
         cx, cy = l + wb // 2, t + hb // 2
