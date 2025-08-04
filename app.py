@@ -122,11 +122,7 @@ if custom_sizes and image_file:
     for (cw, ch), tab in zip(custom_sizes, tabs):
         with tab:
             st.write(f"Adjust crop for **{cw}×{ch}**")
-            # Select best template for this ratio
-            rec = min(
-                records,
-                key=lambda r: abs((cw/ch) - r.get("aspectRatio", r["frame"]["w"]/r["frame"]["h"]))
-            )
+            rec = min(records, key=lambda r: abs((cw/ch) - r.get("aspectRatio", r["frame"]["w"]/r["frame"]["h"])))
             init_l, init_t, init_w, init_h = auto_custom_start(rec, img_w, img_h, cw, ch)
 
             # Compute shift bounds
@@ -135,21 +131,11 @@ if custom_sizes and image_file:
             min_y = -init_t
             max_y = img_h - init_t - init_h
 
-            # Clamp defaults
-            dx0 = max(min_x, min(0, max_x))
-            dy0 = max(min_y, min(0, max_y))
-
-            # Inputs with safe bounds
+            # Inputs with automatic default
             shift_x = st.number_input(
                 "Shift left/right (px)",
                 min_value=min_x,
                 max_value=max_x,
-                step=1,
-                key=f"shiftx_{cw}_{ch}"
-            )",
-                min_value=min_x,
-                max_value=max_x,
-                value=dx0,
                 step=1,
                 key=f"shiftx_{cw}_{ch}"
             )
@@ -157,12 +143,6 @@ if custom_sizes and image_file:
                 "Shift up/down (px)",
                 min_value=min_y,
                 max_value=max_y,
-                step=1,
-                key=f"shifty_{cw}_{ch}"
-            )",
-                min_value=min_y,
-                max_value=max_y,
-                value=dy0,
                 step=1,
                 key=f"shifty_{cw}_{ch}"
             )
