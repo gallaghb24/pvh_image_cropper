@@ -37,16 +37,22 @@ records = []
 if page is not None and doc_data:
     # filter records for selected page
     records = [r for r in doc_data if r["page"] == page]
-    # build DataFrame with both pt and px dims + aspect
+    # determine master asset effective PPI for uniform pixel conversion
+    master = next((r for r in records if r["template"] == "Master Asset"), None)
+    if master:
+        master_eff_x = master["effectivePpi"]["x"]
+        master_eff_y = master["effectivePpi"]["y"]
+    else:
+        master_eff_x = master_eff_y = 72
+        # build DataFrame with both pt and uniform px dims + aspect
+    # all sizes converted using the Master Asset's PPI so duplicates match exactly
     df_rows = []
     for rec in records:
         w_pt = rec["frame"]["w"]
         h_pt = rec["frame"]["h"]
-        eff_x = rec["effectivePpi"]["x"]
-        eff_y = rec["effectivePpi"]["y"]
-        # convert pts to pixels
-        w_px = int(w_pt * eff_x / 72)
-        h_px = int(h_pt * eff_y / 72)
+        # convert pts to pixels using master asset's PPI
+        w_px = int(w_pt * master_eff_x / 72)
+        h_px = int(h_pt * master_eff_y / 72)
         df_rows.append({
             "Template": rec["template"],
             "Width_pt": w_pt,
@@ -56,7 +62,10 @@ if page is not None and doc_data:
             "Aspect": rec.get("aspectRatio")
         })
     # add custom row
-    df_rows.append({"Template": "[CUSTOM]", "Width_pt": None, "Height_pt": None, "Width_px": None, "Height_px": None, "Aspect": None})
+    df_rows.append({
+        "Template": "[CUSTOM]", "Width_pt": None, "Height_pt": None,
+        "Width_px": None, "Height_px": None, "Aspect": None
+    })
     df_sizes = pd.DataFrame(df_rows)
     edited = st.data_editor(
         df_sizes,
@@ -75,12 +84,15 @@ if page is not None and doc_data:
     # extract mappings
     for _, row in edited.iterrows():
         tpl = row["Template"]
-        w = row.get("Width_px") or row.get("Width_pt")
-        h = row.get("Height_px") or row.get("Height_pt")
+        w = row.get("Width_px") if "Width_px" in row else row.get("Width_pt")
+        h = row.get("Height_px") if "Height_px" in row else row.get("Height_pt")
         if pd.notna(w) and pd.notna(h):
             if tpl == "[CUSTOM]":
                 custom_sizes.append((int(w), int(h)))
             else:
+                size_mappings.append({"template": tpl, "size": [int(w), int(h)]})
+else:
+    st.info("Upload JSON and select a page to define output sizes.")
                 size_mappings.append({"template": tpl, "size": [int(w), int(h)]})
 else:
     st.info("Upload JSON and select a page to define output sizes.")
