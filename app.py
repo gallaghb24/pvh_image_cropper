@@ -170,18 +170,21 @@ if (size_mappings or custom_sizes) and image_file:
             zf.writestr(fname, buf.getvalue())
         # custom crops with manual shifts
         for cw, ch in custom_sizes:
-            rec = min(records, key=lambda r: abs((cw/ch) - r.get('aspectRatio', r['frame']['w']/r['frame']['h'])))
+            rec = min(
+                records,
+                key=lambda r: abs((cw/ch) - r.get('aspectRatio', r['frame']['w']/r['frame']['h']))
+            )
+            # compute initial custom window and apply shifts
             left, top, w, h = auto_custom_start(rec, img_w, img_h, cw, ch)
             sx, sy = custom_shifts.get((cw, ch), (0,0))
-            left = max(0, min(left+sx, img_w-w))
-            top  = max(0, min(top+sy, img_h-h))
-            crop = img_orig.crop((left, top, left+w, top+h)).resize((cw, ch), Image.LANCZOS)
-            buf = BytesIO(); crop.save(buf, format='PNG'); buf.seek(0)
+            left = max(0, min(left + sx, img_w - w))
+            top  = max(0, min(top + sy, img_h - h))
+            # crop and resize
+            crop = img_orig.crop((left, top, left + w, top + h)).resize((cw, ch), Image.LANCZOS)
+            buf = BytesIO()
+            crop.save(buf, format='PNG')
+            buf.seek(0)
+            # build label and filename
             label = f"{rec['template']} Custom {cw}x{ch}"
             fname = f"{label}.png"
-            zf.writestr(fname, buf.getvalue())fname, buf.getvalue())
-    zip_buf.seek(0)
-    st.download_button('Download Crops', zip_buf.getvalue(), file_name=f'crops_{image_file.name}.zip', mime='application/zip')
-else:
-    if image_file:
-        st.warning('Define at least one output size to generate crops.')
+            zf.writestr(fname, buf.getvalue())
