@@ -119,25 +119,36 @@ if (size_mappings or custom_sizes) and image_file:
     st.image(img_orig, caption='Master Asset', use_container_width=True)
     zip_buf = BytesIO()
     with zipfile.ZipFile(zip_buf, 'w') as zf:
-        # Combined loop
+                # Combined loop: template + custom
         all_tasks = size_mappings + [(r,s,True) for r,s in custom_sizes]
         for rec, out_size, is_custom in all_tasks:
             if not is_custom:
+                # standard template crop
                 left, top, w, h = compute_crop(rec, img_w, img_h)
             else:
-                left, top, w, h = auto_custom_box(face_box, img_w, img_h, *out_size)
-                # Manual nudges
-                cw, ch = out_size
-                st.subheader(f'Custom Crop: {cw}×{ch}')
+                # custom: start from template rec window, then ratio-fit to width
+                left, top, w, h = compute_crop(rec, img_w, img_h)
+                tgt = out_size[0] / out_size[1]
+                # compute new height from current width
+                new_h = int(w / tgt)
+                # center vertically within original
+                top = top + (h - new_h)//2
+                h = new_h
+                # sliders for manual nudge
+                st.subheader(f'Custom Crop: {out_size[0]}×{out_size[1]}')
+                # horizontal shift range
                 min_x = -left
-                max_x = img_w - left - w
+                max_x = img_w - (left + w)
                 shift_x = st.slider('Shift left/right', min_x, max_x, 0)
+                # vertical shift range
                 min_y = -top
-                max_y = img_h - top - h
+                max_y = img_h - (top + h)
                 shift_y = st.slider('Shift up/down', min_y, max_y, 0)
-                left = max(0, min(left+shift_x, img_w-w))
-                top  = max(0, min(top+shift_y, img_h-h))
+                # apply shifts
+                left = max(0, min(left + shift_x, img_w - w))
+                top  = max(0, min(top + shift_y, img_h - h))
             # Crop & resize
+            crop = img_orig.crop((left, top, left + w, top + h)).resize(tuple(out_size), Image.LANCZOS)
             crop = img_orig.crop((left, top, left+w, top+h)).resize(tuple(out_size), Image.LANCZOS)
             # Preview custom
             if is_custom:
