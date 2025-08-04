@@ -173,12 +173,20 @@ if records and custom_sizes:
             if min_x > max_x: min_x, max_x = max_x, min_x
             if min_y > max_y: min_y, max_y = max_y, min_y
             # sliders
-            shift_x = st.slider(
-                "Shift left/right", min_value=min_x, max_value=max_x, value=0, step=1, key=f"shiftx_{i}"
-            )
-            shift_y = st.slider(
-                "Shift up/down", min_value=min_y, max_value=max_y, value=0, step=1, key=f"shifty_{i}"
-            )
+            if min_x == max_x:
+                shift_x = 0
+            else:
+                shift_x = st.slider(
+                    "Shift left/right", min_value=min_x, max_value=max_x,
+                    value=0, step=1, key=f"shiftx_{i}"
+                )
+            if min_y == max_y:
+                shift_y = 0
+            else:
+                shift_y = st.slider(
+                    "Shift up/down", min_value=min_y, max_value=max_y,
+                    value=0, step=1, key=f"shifty_{i}"
+                )
             # preview
             x0, y0 = left + shift_x, top + shift_y
             x1, y1 = x0 + w, y0 + h
