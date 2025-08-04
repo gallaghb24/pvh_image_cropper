@@ -131,15 +131,35 @@ if custom_sizes and image_file:
             min_y = -init_t
             max_y = img_h - init_t - init_h
             # horizontal shift input
-            shift_x = st.number_input(
-                'Shift left/right (px)',
+                            # horizontal shift input with clamped default
+                default_x = 0
+                if default_x < min_x:
+                    default_x = min_x
+                elif default_x > max_x:
+                    default_x = max_x
+                shift_x = st.number_input(
+                    'Shift left/right (px)',
+                    min_value=min_x, max_value=max_x,
+                    value=default_x, step=1,
+                    key=f'shiftx_{cw}_{ch}'
+                )',
                 min_value=min_x, max_value=max_x,
                 value=0, step=1,
                 key=f'shiftx_{cw}_{ch}'
             )
             # vertical shift input
-            shift_y = st.number_input(
-                'Shift up/down (px)',
+                            # vertical shift input with clamped default
+                default_y = 0
+                if default_y < min_y:
+                    default_y = min_y
+                elif default_y > max_y:
+                    default_y = max_y
+                shift_y = st.number_input(
+                    'Shift up/down (px)',
+                    min_value=min_y, max_value=max_y,
+                    value=default_y, step=1,
+                    key=f'shifty_{cw}_{ch}'
+                )',
                 min_value=min_y, max_value=max_y,
                 value=0, step=1,
                 key=f'shifty_{cw}_{ch}'
