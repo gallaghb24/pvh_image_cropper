@@ -89,27 +89,56 @@ if page is not None and image_file and (size_mappings or custom_sizes):
         with zipfile.ZipFile(zip_buffer, "w") as zf:
             for idx, (rec, out_size, is_custom) in enumerate(crops_to_generate):
                 offs = rec['imageOffset']
-                base_left = offs['x']
-                base_top = offs['y']
-                base_w = offs['w']
-                base_h = offs['h']
+
+                # InDesign offsets can be normalized (0-1) or absolute pixels.
+                # Detect normalized values and scale to the uploaded image size.
+                if all(0 <= offs[k] <= 1 for k in ('x', 'y', 'w', 'h')):
+                    base_left = offs['x'] * img.width
+                    base_top = offs['y'] * img.height
+                    base_w = offs['w'] * img.width
+                    base_h = offs['h'] * img.height
+                else:
+                    base_left = offs['x']
+                    base_top = offs['y']
+                    base_w = offs['w']
+                    base_h = offs['h']
+
+                # Ensure region matches target aspect ratio to avoid distortion
+                target_ratio = out_size[0] / out_size[1]
+                current_ratio = base_w / base_h if base_h else target_ratio
+                left, top, w, h = base_left, base_top, base_w, base_h
 
                 if not is_custom:
-                    left, top, w, h = base_left, base_top, base_w, base_h
+                    if abs(current_ratio - target_ratio) > 1e-6:
+                        if current_ratio > target_ratio:
+                            # too wide -> reduce width
+                            new_w = h * target_ratio
+                            left += (w - new_w) / 2
+                            w = new_w
+                        else:
+                            # too tall -> reduce height
+                            new_h = w / target_ratio
+                            top += (h - new_h) / 2
+                            h = new_h
                 else:
                     cw, ch = out_size
                     # center custom region in base
-                    target_ratio = cw/ch
-                    new_w = base_w
+                    new_w = w
                     new_h = new_w / target_ratio
-                    if new_h > base_h:
-                        new_h = base_h
+                    if new_h > h:
+                        new_h = h
                         new_w = new_h * target_ratio
-                    xc = base_left + base_w/2
-                    yc = base_top + base_h/2
-                    left = max(0, xc - new_w/2)
-                    top  = max(0, yc - new_h/2)
+                    xc = left + w / 2
+                    yc = top + h / 2
+                    left = xc - new_w / 2
+                    top = yc - new_h / 2
                     w, h = new_w, new_h
+
+                # Clamp to image bounds and convert to integers
+                left = int(max(0, min(left, img.width)))
+                top = int(max(0, min(top, img.height)))
+                w = int(max(1, min(w, img.width - left)))
+                h = int(max(1, min(h, img.height - top)))
 
                 crop_img = img.crop((left, top, left + w, top + h))
                 crop_img = crop_img.resize(tuple(out_size), Image.LANCZOS)
