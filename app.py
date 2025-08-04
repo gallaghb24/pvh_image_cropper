@@ -77,6 +77,7 @@ else:
 st.subheader('Output Sizes Mapping')
 size_mappings, custom_sizes = [], []
 if records:
+    # Build DataFrame of templates and a custom placeholder
     rows = []
     for rec in records:
         w_pt, h_pt = rec['frame']['w'], rec['frame']['h']
@@ -90,18 +91,26 @@ if records:
             'Height_px': h_px,
             'Aspect Ratio': ar
         })
-    # placeholder for customs
     rows.append({'Template':'[CUSTOM]', 'Width_px':None, 'Height_px':None, 'Aspect Ratio':None})
-    df = pd.DataFrame(rows)
-    edited = st.data_editor(df, hide_index=True, num_rows='dynamic', key='map_editor')(df, hide_index=True, num_rows='dynamic', key='map_editor')
-    for i, row in edited.iloc[:len(records)].iterrows():
-        if pd.notna(row.Width_px) and pd.notna(row.Height_px):
-            size_mappings.append((records[i], [int(row.Width_px), int(row.Height_px)], False))
-    for row in edited.iloc[len(records):].itertuples():
-        if pd.notna(row.Width_px) and pd.notna(row.Height_px):
-            custom_sizes.append((int(row.Width_px), int(row.Height_px)))
+    df_sizes = pd.DataFrame(rows)
+    edited_df = st.data_editor(df_sizes, hide_index=True, num_rows='dynamic', key='map_editor')
+    # Extract mappings
+    size_mappings = []
+    custom_sizes = []
+    # Templates
+    for i, rec in enumerate(records):
+        w = edited_df.at[i, 'Width_px']
+        h = edited_df.at[i, 'Height_px']
+        if pd.notna(w) and pd.notna(h):
+            size_mappings.append((rec, [int(w), int(h)], False))
+    # Customs
+    for j in range(len(records), len(edited_df)):
+        w = edited_df.at[j, 'Width_px']
+        h = edited_df.at[j, 'Height_px']
+        if pd.notna(w) and pd.notna(h):
+            custom_sizes.append((int(w), int(h)))
 else:
-    size_mappings, custom_sizes = [], []
+    st.info('Upload image & JSON to configure sizes.')
 
 # --- Face Detection ---
 face_box = None
