@@ -152,7 +152,44 @@ if records:
             "bottom": max(y+h for y,h in zip(ys,hs)),
         }
 
-    # Generate & Download
+    # --- Manual Adjustments for Custom Crops ---
+if records and custom_sizes:
+    st.subheader("Adjust Custom Crops")
+    # tabs per custom size
+    tabs = st.tabs([f"{cw}×{ch}" for cw,ch in custom_sizes])
+    custom_shifts = {}
+    for i, ((cw, ch), tab) in enumerate(zip(custom_sizes, tabs)):
+        with tab:
+            st.write(f"Fine-tune crop for **{cw}×{ch}**")
+            # choose base template
+            rec = min(
+                records,
+                key=lambda r: abs((cw/ch) - r["frame"]["w"]/r["frame"]["h"])            )
+            # initial region
+            left, top, w, h = auto_custom_start(rec, img_w, img_h, cw, ch)
+            # compute shift bounds
+            min_x, max_x = -left, img_w - left - w
+            min_y, max_y = -top, img_h - top - h
+            if min_x > max_x: min_x, max_x = max_x, min_x
+            if min_y > max_y: min_y, max_y = max_y, min_y
+            # sliders
+            shift_x = st.slider(
+                "Shift left/right", min_value=min_x, max_value=max_x, value=0, step=1, key=f"shiftx_{i}"
+            )
+            shift_y = st.slider(
+                "Shift up/down", min_value=min_y, max_value=max_y, value=0, step=1, key=f"shifty_{i}"
+            )
+            # preview
+            x0, y0 = left + shift_x, top + shift_y
+            x1, y1 = x0 + w, y0 + h
+            preview = img_orig.crop((x0, y0, x1, y1)).resize((cw, ch), Image.LANCZOS)
+            st.image(preview, caption=f"Preview {cw}×{ch}", width=300)
+            custom_shifts[(cw, ch)] = (shift_x, shift_y)
+
+    # store for download
+    # Attach custom_shifts to zip logic
+
+# Generate & Download
     zip_buf = BytesIO()
     with zipfile.ZipFile(zip_buf, "w") as zf:
         # templates
