@@ -8,7 +8,6 @@ from typing import List, Tuple
 # ——————————————————————————————————————————————————————————
 # Helper functions
 # ——————————————————————————————————————————————————————————
-
 def compute_crop(rec: dict, img_w: int, img_h: int) -> Tuple[int, int, int, int]:
     """Compute guideline crop rectangle in pixel coordinates."""
     off, fr = rec["imageOffset"], rec["frame"]
@@ -30,7 +29,6 @@ def compute_crop(rec: dict, img_w: int, img_h: int) -> Tuple[int, int, int, int]
             h = new_h
     return l, t, w, h
 
-
 def auto_custom_start(rec: dict, img_w: int, img_h: int, cw: int, ch: int) -> Tuple[int, int, int, int]:
     l, t, w, h = compute_crop(rec, img_w, img_h)
     new_h = int(w / (cw / ch))
@@ -40,20 +38,30 @@ def auto_custom_start(rec: dict, img_w: int, img_h: int, cw: int, ch: int) -> Tu
 # ——————————————————————————————————————————————————————————
 # Streamlit page config
 # ——————————————————————————————————————————————————————————
-
-st.set_page_config(page_title="Smart Crop Automation Prototype", layout="wide", initial_sidebar_state="expanded")
-st.markdown("<style>[data-testid='stSidebar']{min-width:450px!important;max-width:450px!important;}</style>", unsafe_allow_html=True)
+st.set_page_config(
+    page_title="Smart Crop Automation Prototype", 
+    layout="wide", 
+    initial_sidebar_state="expanded"
+)
+st.markdown(
+    "<style>[data-testid='stSidebar']{min-width:450px!important;max-width:450px!important;}</style>", 
+    unsafe_allow_html=True
+)
 st.title("Smart Crop Automation Prototype")
 
 # ——————————————————————————————————————————————————————————
 # Sidebar inputs
 # ——————————————————————————————————————————————————————————
-
+st.sidebar.header("Inputs")
 json_file = st.sidebar.file_uploader("Guidelines JSON", type="json")
-image_file = st.sidebar.file_uploader("Master Image", type=["png","jpg","jpeg","tif","tiff"])
+image_file = st.sidebar.file_uploader("Master Image", type=["png", "jpg", "jpeg", "tif", "tiff"])
 
 with st.sidebar.expander("⚙️ Custom Crops", expanded=True):
-    df_editor = st.data_editor(pd.DataFrame([{"Width_px": None, "Height_px": None}]), hide_index=True, num_rows="dynamic")
+    df_editor = st.data_editor(
+        pd.DataFrame([{"Width_px": None, "Height_px": None}]),
+        hide_index=True,
+        num_rows="dynamic"
+    )
     custom_sizes: List[Tuple[int, int]] = [
         (int(r.Width_px), int(r.Height_px))
         for r in df_editor.itertuples()
@@ -63,7 +71,6 @@ with st.sidebar.expander("⚙️ Custom Crops", expanded=True):
 # ——————————————————————————————————————————————————————————
 # Load matching guideline records
 # ——————————————————————————————————————————————————————————
-
 records: List[dict] = []
 if json_file and image_file:
     data = json.load(json_file)
@@ -84,7 +91,6 @@ guidelines = [r for r in records if not (abs(r["imageOffset"]["x"]) < 1e-6 and a
 # ——————————————————————————————————————————————————————————
 # Display guideline + custom tables
 # ——————————————————————————————————————————————————————————
-
 st.subheader("Guideline Crops")
 gtable = []
 for rec in guidelines:
@@ -104,14 +110,12 @@ st.dataframe(pd.DataFrame(ctable), use_container_width=True)
 # ——————————————————————————————————————————————————————————
 # Load master image
 # ——————————————————————————————————————————————————————————
-
 img = Image.open(image_file)
 iw, ih = img.size
 
 # ——————————————————————————————————————————————————————————
 # Custom adjustment UI
 # ——————————————————————————————————————————————————————————
-
 shifts = {}
 if custom_sizes:
     st.subheader("Adjust Custom Crops")
@@ -171,7 +175,6 @@ if custom_sizes:
 # ——————————————————————————————————————————————————————————
 # Generate ZIP
 # ——————————————————————————————————————————————————————————
-
 zip_buf = BytesIO()
 with zipfile.ZipFile(zip_buf, "w") as zf:
     # Guideline crops
@@ -197,5 +200,4 @@ with zipfile.ZipFile(zip_buf, "w") as zf:
         zf.writestr(f"Custom/{cw}x{ch}.png", tmp.getvalue())
 
 zip_buf.seek(0)
-
 st.download_button("Download Crops", zip_buf.getvalue(), file_name=f"crops_{image_file.name}.zip", mime="application/zip")
