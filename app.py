@@ -37,8 +37,8 @@ def auto_custom_box(face_box, img_w, img_h, cw, ch):
     target = cw / ch
     crop_h = int(img_w / target)
     left = 0
-    top = max(0, (img_h - crop_h) // 2)
     w = img_w
+    top = max(0, (img_h - crop_h) // 2)
     h = crop_h
     # vertical nudge to include faces
     if face_box:
@@ -51,7 +51,7 @@ def auto_custom_box(face_box, img_w, img_h, cw, ch):
 
 # --- App Setup ---
 st.set_page_config(page_title='CropPack Tester', layout='wide')
-st.title('CropPack Web App Prototype')
+st.title('CropPack Web App with Manual Cropping')
 
 # --- Sidebar Inputs ---
 st.sidebar.header('Inputs')
@@ -59,7 +59,7 @@ json_file = st.sidebar.file_uploader('Upload CropPack JSON', type=['json'])
 image_file = st.sidebar.file_uploader('Upload Master Asset Image', type=['png','jpg','jpeg','tif','tiff'])
 st.sidebar.markdown('---')
 
-# --- Select Page ---
+# --- Page Selection ---
 pages, doc_data = [], []
 if json_file:
     try:
@@ -69,10 +69,9 @@ if json_file:
         st.sidebar.error(f'Invalid JSON: {e}')
 page = st.sidebar.selectbox('Select Page', pages) if pages else None
 
-# --- Output Sizes Editor ---
+# --- Output Sizes Mapping ---
 st.subheader('Output Sizes Mapping')
 size_mappings, custom_sizes = [], []
-records = []
 if page and doc_data:
     records = [r for r in doc_data if r['page'] == page]
     rows = []
@@ -87,6 +86,7 @@ if page and doc_data:
     rows.append({'Template':'[CUSTOM]', 'Width_px':None, 'Height_px':None})
     df = pd.DataFrame(rows)
     edited = st.data_editor(df, hide_index=True, num_rows='dynamic', key='map_editor')
+    # build tasks
     for i, row in edited.iloc[:len(records)].iterrows():
         if pd.notna(row.Width_px) and pd.notna(row.Height_px):
             size_mappings.append((records[i], [int(row.Width_px), int(row.Height_px)], False))
@@ -120,22 +120,20 @@ if (size_mappings or custom_sizes) and image_file:
     st.image(img_orig, caption='Master Asset', use_container_width=True)
     zip_buf = BytesIO()
     with zipfile.ZipFile(zip_buf, 'w') as zf:
-        # template crops
+        # Template crops
         for rec, out_size, _ in size_mappings:
             left, top, w, h = compute_crop(rec, img_w, img_h)
             crop = img_orig.crop((left, top, left+w, top+h)).resize(tuple(out_size), Image.LANCZOS)
             buf = BytesIO(); crop.save(buf, format='PNG'); buf.seek(0)
             zf.writestr(f"{rec['template']}_{out_size[0]}x{out_size[1]}.png", buf.getvalue())
-        # custom crops via canvas
-                for cw, ch in custom_sizes:
+        # Canvas-assisted custom crops
+        for cw, ch in custom_sizes:
             st.subheader(f'Custom Crop: {cw}×{ch}')
-            # Prepare initial rectangle via auto_custom_box
             init_l, init_t, init_w, init_h = auto_custom_box(face_box, img_w, img_h, cw, ch)
-            # Convert master image to bytes for canvas background
+            # prepare background bytes
             bg_buf = BytesIO()
             img_orig.save(bg_buf, format='PNG')
             bg_bytes = bg_buf.getvalue()
-            # Launch drawable canvas
             canvas_data = st_canvas(
                 fill_color='', stroke_width=2,
                 background_image=bg_bytes,
@@ -143,7 +141,6 @@ if (size_mappings or custom_sizes) and image_file:
                 initial_drawing=[{'type':'rect','x':init_l,'y':init_t,'width':init_w,'height':init_h,'strokeColor':'#00FF00'}],
                 drawing_mode='transform'
             )
-            # After user adjust
             if canvas_data.json_data and canvas_data.json_data.get('objects'):
                 obj = canvas_data.json_data['objects'][0]
                 l = int(obj['left']); t = int(obj['top'])
