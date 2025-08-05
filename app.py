@@ -9,6 +9,23 @@ import numpy as np
 import math
 
 # ——————————————————————————————————————————————————————————
+# Canonical guideline categories (width / height aspect ratios)
+# TODO: Replace Portrait and Landscape with the client’s exact ratios.
+CANON = {
+    "Portrait": 0.80,                 # e.g., 4:5 -> 0.8  (REPLACE if different)
+    "Landscape": 1.50,                # e.g., 3:2 -> 1.5  (REPLACE if different)
+    "Square": 1.00,
+    "Vertical 2x5": 2/5,              # 0.4
+    "Extreme Vertical 1x4": 1/4,      # 0.25
+    "Extreme Landscape 3x1": 3.0,
+    "Extreme Landscape 4x1": 4.0,
+}
+
+def closest_canon_name(ar: float) -> str:
+    # Use relative error; robust across very wide/tall ARs.
+    return min(CANON.keys(), key=lambda k: abs(math.log(ar / CANON[k])))
+
+# ——————————————————————————————————————————————————————————
 # Helper functions
 # ——————————————————————————————————————————————————————————
 def compute_crop(rec: dict, img_w: int, img_h: int) -> Tuple[int, int, int, int]:
@@ -165,7 +182,14 @@ else:
 if not records:
     st.stop()
 
+# Exclude master (zero-offset)
 guidelines = [r for r in records if not (abs(r["imageOffset"]["x"]) < 1e-6 and abs(r["imageOffset"]["y"]) < 1e-6)]
+
+# Build the set of canonical categories that are actually available for this asset
+available_canonical = set()
+for rec in guidelines:
+    gar = rec["frame"]["w"] / rec["frame"]["h"]
+    available_canonical.add(closest_canon_name(gar))
 
 # ——————————————————————————————————————————————————————————
 # Tables
@@ -176,14 +200,29 @@ for rec in guidelines:
     w_pt, h_pt = rec["frame"]["w"], rec["frame"]["h"]
     ex, ey = rec["effectivePpi"]["x"], rec["effectivePpi"]["y"]
     w_px, h_px = int(w_pt * ex / 72), int(h_pt * ey / 72)
-    gtable.append({"Template": rec["template"], "Width_px": w_px, "Height_px": h_px, "AR": round(w_px / h_px, 2)})
+    canon = closest_canon_name(w_pt / h_pt)
+    gtable.append({
+        "Template": rec["template"],
+        "Width_px": w_px,
+        "Height_px": h_px,
+        "AR": round(w_px / h_px, 3),
+        "Canonical": canon,
+    })
 st.dataframe(pd.DataFrame(gtable), use_container_width=True)
 
 st.subheader("Custom Crops")
+nearest_for_size = {}
 ctable = []
 for cw, ch in custom_sizes:
-    ref = min(records, key=lambda r: abs((cw / ch) - r["frame"]["w"] / r["frame"]["h"]))
-    ctable.append({"Template": f"{ref['template']} {cw}×{ch}", "Width_px": cw, "Height_px": ch, "AR": round(cw / ch, 2)})
+    canon = closest_canon_name(cw / ch)
+    nearest_for_size[(cw, ch)] = canon
+    recommended = canon in available_canonical
+    ctable.append({
+        "Size": f"{cw}×{ch}",
+        "AR": round(cw / ch, 3),
+        "Nearest Guideline": canon,
+        "Recommended": "Yes" if recommended else "⚠️ Not recommended (missing guideline)",
+    })
 st.dataframe(pd.DataFrame(ctable), use_container_width=True)
 
 # ——————————————————————————————————————————————————————————
@@ -210,7 +249,7 @@ if custom_sizes:
     st.subheader("Adjust Custom Crops")
     tabs = st.tabs([f"{w}×{h}" for w, h in custom_sizes])
 
-    for ((cw, ch), tab) in zip(custom_sizes, tabs):
+    for ((cw, ch), tab) in zip(custom_sizes, tabs)):
         key_root = f"{cw}x{ch}"
         base_key = f"base_{key_root}"
         fa_key   = f"face_{key_root}"
@@ -223,6 +262,7 @@ if custom_sizes:
             face_on = st.checkbox("Face-aware for this size", value=True, key=fa_key)
 
             # Recompute base if toggle changed OR base absent
+            # Base still uses the nearest *available* guideline in JSON (operationally correct)
             rec = min(records, key=lambda r: abs((cw / ch) - r["frame"]["w"] / r["frame"]["h"]))
             recompute_base = True
             if base_key in st.session_state and f"{base_key}_fa" in st.session_state:
@@ -237,23 +277,21 @@ if custom_sizes:
             else:
                 l0, t0, wb, hb = st.session_state[base_key]
 
-            # Create containers in visual order (Preview first), then fill them later
+            # Visual order: preview → height row → width row → zoom row
             preview_box = st.container()
-            # height and width rows with 2 columns each (slider + number input side-by-side)
-            height_row = st.container()
-            width_row  = st.container()
-            # zoom row at bottom with 2 columns
-            zoom_row   = st.container()
+            height_row  = st.container()
+            width_row   = st.container()
+            zoom_row    = st.container()
 
-            # Defaults in session
+            # Defaults
             st.session_state.setdefault(z_key, 0)
             st.session_state.setdefault(sx_key, 0)
             st.session_state.setdefault(sy_key, 0)
 
-            # ---------------- Fill ZOOM row FIRST (compute order) ----------------
+            # Zoom first (compute order)
             with zoom_row:
                 zcol1, zcol2 = st.columns([3, 1])
-                zoom_floor = max(wb / iw, hb / ih, 1.0)  # ensure window <= image
+                zoom_floor = max(wb / iw, hb / ih, 1.0)
                 zd_prev = int(st.session_state[z_key])
                 with zcol1:
                     zd_slider = st.slider("Zoom ±10%", -10, 10, zd_prev, 1, key=f"zslider_{key_root}")
@@ -264,23 +302,19 @@ if custom_sizes:
                 zoom_user = 1 + zd / 100.0
                 zoom = max(zoom_floor, zoom_user)
 
-            # Geometry from base + zoom (now accurate for this run)
+            # Geometry & legal ranges
             wz, hz = int(wb / zoom), int(hb / zoom)
             cx, cy = l0 + wb // 2, t0 + hb // 2
-
-            # Legal movement ranges
             min_x = -cx + wz // 2
             max_x =  iw - (cx + wz // 2)
             min_y = -cy + hz // 2
             max_y =  ih - (cy + hz // 2)
 
-            # Read previous offsets, clamp BEFORE rendering widgets
-            sx_prev = int(st.session_state[sx_key])
-            sy_prev = int(st.session_state[sy_key])
-            sx_prev = max(min_x, min(sx_prev, max_x))
-            sy_prev = max(min_y, min(sy_prev, max_y))
+            # Prior offsets (clamped)
+            sx_prev = max(min_x, min(int(st.session_state[sx_key]), max_x))
+            sy_prev = max(min_y, min(int(st.session_state[sy_key]), max_y))
 
-            # ---------------- HEIGHT row ----------------
+            # Height row
             with height_row:
                 if min_y < max_y:
                     hcol1, hcol2 = st.columns([3, 1])
@@ -293,7 +327,7 @@ if custom_sizes:
                     sy = 0
                 st.session_state[sy_key] = sy
 
-            # ---------------- WIDTH row ----------------
+            # Width row
             with width_row:
                 if min_x < max_x:
                     wcol1, wcol2 = st.columns([3, 1])
@@ -306,13 +340,17 @@ if custom_sizes:
                     sx = 0
                 st.session_state[sx_key] = sx
 
-            # ---------------- PREVIEW (compute after widgets; clamp) ----------------
+            # Preview
             l2, t2 = clamp_crop_from_center(cx, cy, wz, hz, iw, ih, st.session_state[sx_key], st.session_state[sy_key])
             prev = img.crop((l2, t2, l2 + wz, t2 + hz)).resize((cw, ch))
             with preview_box:
-                st.image(prev, caption=f"Preview {cw}×{ch}", use_container_width=True)
+                # Per-size warning if nearest canonical guideline is not available for this asset
+                canon = nearest_for_size[(cw, ch)]
+                if canon not in available_canonical:
+                    st.warning(f"{canon} is not recommended for this asset (no matching guideline).")
+                st.image(prev, caption=f"Preview {cw}×{ch} — {canon}", use_container_width=True)
 
-            # Persist for export (WYSIWYG)
+            # Persist for export
             shifts[(cw, ch)] = (st.session_state[sx_key], st.session_state[sy_key], zoom, face_on)
 
 # ——————————————————————————————————————————————————————————
