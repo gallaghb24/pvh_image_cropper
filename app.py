@@ -158,8 +158,11 @@ if custom_sizes:
 
             sx, sy, zd = st.session_state[sx_key], st.session_state[sy_key], st.session_state[z_key]
 
-            # ✅ Apply clamping for preview
-            l2, t2 = clamp_crop(cx, cy, wz, hz, iw, ih, sx, sy)
+            # ✅ Apply clamping for preview (matching export logic)
+            wz, hz = int(wb / zoom), int(hb / zoom)
+            cx, cy = l0 + wb // 2, t0 + hb // 2
+            l2 = max(0, min(cx - wz // 2 + sx, iw - wz))
+            t2 = max(0, min(cy - hz // 2 + sy, ih - hz))
             prev = img.crop((l2, t2, l2 + wz, t2 + hz)).resize((cw, ch))
             st.image(prev, caption=f"Preview {cw}×{ch}", use_container_width=True)
 
