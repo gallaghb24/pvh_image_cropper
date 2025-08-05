@@ -49,7 +49,7 @@ def face_center(box):
     return ((x1 + x2) / 2.0, (y1 + y2) / 2.0)
 
 def choose_face_for_window(faces: List[Tuple[int,int,int,int]], l:int, t:int, w:int, h:int):
-    """Prefer a face that intersects the current window; otherwise pick the face nearest to the window center."""
+    """Prefer a face that intersects the current window; otherwise pick the face nearest the window center."""
     if not faces:
         return None
     window = (l, t, l + w, t + h)
@@ -75,10 +75,8 @@ def adjust_crop_to_include_face(l, t, w, h, face_box, iw, ih):
         return l, t, w, h
     fx1, fy1, fx2, fy2 = face_box
     crop_x1, crop_y1, crop_x2, crop_y2 = l, t, l + w, t + h
-    # Already inside?
     if (fx1 >= crop_x1 and fx2 <= crop_x2 and fy1 >= crop_y1 and fy2 <= crop_y2):
         return l, t, w, h
-    # Minimal shifts
     shift_x = 0
     shift_y = 0
     if fx1 < crop_x1:
@@ -89,7 +87,6 @@ def adjust_crop_to_include_face(l, t, w, h, face_box, iw, ih):
         shift_y = fy1 - crop_y1
     elif fy2 > crop_y2:
         shift_y = fy2 - crop_y2
-    # Clamp to image bounds
     new_l = min(max(l + shift_x, 0), iw - w)
     new_t = min(max(t + shift_y, 0), ih - h)
     return new_l, new_t, w, h
@@ -179,10 +176,17 @@ shifts = {}
 if custom_sizes:
     st.subheader("Adjust Custom Crops")
     tabs = st.tabs([f"{w}×{h}" for w, h in custom_sizes])
-    for idx, ((cw, ch), tab) in enumerate(zip(custom_sizes, tabs)):
+
+    for ((cw, ch), tab) in zip(custom_sizes, tabs):
+        # ---------- use size-based keys (stable no matter the tab order) ----------
+        key_root = f"{cw}x{ch}"
+        base_key = f"base_{key_root}"
+        z_key   = f"zoom_{key_root}"
+        sx_key  = f"sx_{key_root}"
+        sy_key  = f"sy_{key_root}"
+
         with tab:
             # Persist the post–FaceAware base window per size (WYSIWYG)
-            base_key = f"base_{cw}x{ch}"
             if base_key not in st.session_state:
                 base = min(records, key=lambda r: abs((cw / ch) - r["frame"]["w"] / r["frame"]["h"]))
                 l0, t0, wb, hb = auto_custom_start(base, iw, ih, cw, ch)
@@ -192,8 +196,7 @@ if custom_sizes:
             else:
                 l0, t0, wb, hb = st.session_state[base_key]
 
-            # UI state defaults
-            z_key, sx_key, sy_key = f"zoom_{idx}", f"sx_{idx}", f"sy_{idx}"
+            # UI state defaults (per size)
             st.session_state.setdefault(z_key, 0)   # zoom delta in %
             st.session_state.setdefault(sx_key, 0)  # width offset
             st.session_state.setdefault(sy_key, 0)  # height offset
@@ -231,9 +234,9 @@ if custom_sizes:
             colh1, colh2 = st.columns([3, 1])
             if min_y < max_y:
                 with colh1:
-                    sy = st.slider("Height Offset", min_y, max_y, sy, 1, key=f"syslider_{idx}")
+                    sy = st.slider("Height Offset", min_y, max_y, sy, 1, key=f"syslider_{key_root}")
                 with colh2:
-                    sy = st.number_input("Height", min_y, max_y, sy, 1, key=f"synum_{idx}", label_visibility="collapsed")
+                    sy = st.number_input("Height", min_y, max_y, sy, 1, key=f"synum_{key_root}", label_visibility="collapsed")
             else:
                 sy = 0  # no movement possible
             st.session_state[sy_key] = int(sy)
@@ -242,9 +245,9 @@ if custom_sizes:
             colw1, colw2 = st.columns([3, 1])
             if min_x < max_x:
                 with colw1:
-                    sx = st.slider("Width Offset", min_x, max_x, sx, 1, key=f"sxslider_{idx}")
+                    sx = st.slider("Width Offset", min_x, max_x, sx, 1, key=f"sxslider_{key_root}")
                 with colw2:
-                    sx = st.number_input("Width", min_x, max_x, sx, 1, key=f"sxnum_{idx}", label_visibility="collapsed")
+                    sx = st.number_input("Width", min_x, max_x, sx, 1, key=f"sxnum_{key_root}", label_visibility="collapsed")
             else:
                 sx = 0  # no movement possible
             st.session_state[sx_key] = int(sx)
@@ -252,13 +255,17 @@ if custom_sizes:
             # Zoom (±10%), applied with floor during computation
             colz1, colz2 = st.columns([3, 1])
             with colz1:
-                zd = st.slider("Zoom ±10%", -10, 10, zd, 1, key=f"zslider_{idx}")
+                zd = st.slider("Zoom ±10%", -10, 10, zd, 1, key=f"zslider_{key_root}")
             with colz2:
-                zd = st.number_input("Zoom%", -10, 10, zd, 1, key=f"znum_{idx}", label_visibility="collapsed")
+                zd = st.number_input("Zoom%", -10, 10, zd, 1, key=f"znum_{key_root}", label_visibility="collapsed")
             st.session_state[z_key] = int(zd)
 
             # Persist for export (use the same base window + current UI)
-            shifts[(cw, ch)] = (int(st.session_state[sx_key]), int(st.session_state[sy_key]), max(zoom_floor, 1 + int(st.session_state[z_key]) / 100.0))
+            shifts[(cw, ch)] = (
+                int(st.session_state[sx_key]),
+                int(st.session_state[sy_key]),
+                max(zoom_floor, 1 + int(st.session_state[z_key]) / 100.0)
+            )
 
 # ——————————————————————————————————————————————————————————
 # Generate ZIP (JPEG with ICC); uses the SAME persisted base windows
@@ -281,7 +288,8 @@ with zipfile.ZipFile(zip_buf, "w") as zf:
 
     # Custom crops (FaceAware + WYSIWYG)
     for cw, ch in custom_sizes:
-        base_key = f"base_{cw}x{ch}"
+        key_root = f"{cw}x{ch}"
+        base_key = f"base_{key_root}"
         if base_key in st.session_state:
             l0, t0, wb, hb = st.session_state[base_key]
         else:
