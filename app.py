@@ -4,6 +4,8 @@ import json, pandas as pd
 from io import BytesIO
 import zipfile
 from typing import List, Tuple
+import cv2
+import numpy as np
 
 # ——————————————————————————————————————————————————————————
 # Helper functions
@@ -136,11 +138,10 @@ st.dataframe(pd.DataFrame(ctable), use_container_width=True)
 # Load master image + FACE DETECTION (OpenCV)
 # ——————————————————————————————————————————————————————————
 img = Image.open(image_file)
+icc_profile = img.info.get("icc_profile")
 iw, ih = img.size
 
 # Face detection (run once, pick largest face if present)
-import cv2
-import numpy as np
 img_cv = np.array(img.convert("RGB"))
 gray = cv2.cvtColor(img_cv, cv2.COLOR_RGB2GRAY)
 casc = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
@@ -222,20 +223,25 @@ if custom_sizes:
             shifts[(cw, ch)] = (sx, sy, 1 + zd / 100)
 
 # ——————————————————————————————————————————————————————————
-# Generate ZIP
+# Generate ZIP (ALL JPG WITH ICC)
 # ——————————————————————————————————————————————————————————
 zip_buf = BytesIO()
 with zipfile.ZipFile(zip_buf, "w") as zf:
-    # Guideline crops
+    # Guideline crops (JPG+ICC)
     for rec in guidelines:
         ow = int(rec["frame"]["w"] * rec["effectivePpi"]["x"] / 72)
         oh = int(rec["frame"]["h"] * rec["effectivePpi"]["y"] / 72)
         l, t, wb, hb = compute_crop(rec, iw, ih)
         gcrop = img.crop((l, t, l + wb, t + hb)).resize((ow, oh))
-        tmp = BytesIO(); gcrop.save(tmp, format="PNG"); tmp.seek(0)
-        zf.writestr(f"Guidelines/{rec['template']}_{ow}x{oh}.png", tmp.getvalue())
+        tmp = BytesIO()
+        save_kwargs = {}
+        if icc_profile is not None:
+            save_kwargs["icc_profile"] = icc_profile
+        gcrop.save(tmp, format="JPEG", quality=95, subsampling=0, optimize=True, **save_kwargs)
+        tmp.seek(0)
+        zf.writestr(f"Guidelines/{rec['template']}_{ow}x{oh}.jpg", tmp.getvalue())
 
-    # Custom crops
+    # Custom crops (JPG+ICC)
     for cw, ch in custom_sizes:
         base = min(records, key=lambda r: abs((cw / ch) - r["frame"]["w"] / r["frame"]["h"]))
         l, t, wb, hb = auto_custom_start(base, iw, ih, cw, ch)
@@ -247,8 +253,13 @@ with zipfile.ZipFile(zip_buf, "w") as zf:
         l2 = max(0, min(cx - wz // 2 + sx, iw - wz))
         t2 = max(0, min(cy - hz // 2 + sy, ih - hz))
         ccrop = img.crop((l2, t2, l2 + wz, t2 + hz)).resize((cw, ch))
-        tmp = BytesIO(); ccrop.save(tmp, format="PNG"); tmp.seek(0)
-        zf.writestr(f"Custom/{cw}x{ch}.png", tmp.getvalue())
+        tmp = BytesIO()
+        save_kwargs = {}
+        if icc_profile is not None:
+            save_kwargs["icc_profile"] = icc_profile
+        ccrop.save(tmp, format="JPEG", quality=95, subsampling=0, optimize=True, **save_kwargs)
+        tmp.seek(0)
+        zf.writestr(f"Custom/{cw}x{ch}.jpg", tmp.getvalue())
 
 zip_buf.seek(0)
 st.download_button("Download Crops", zip_buf.getvalue(), file_name=f"crops_{image_file.name}.zip", mime="application/zip")
