@@ -19,7 +19,6 @@ def compute_crop(rec: dict, img_w: int, img_h: int) -> Tuple[int, int, int, int]
     t = int((fy / fh) * img_h)
     w = int((fr["w"] / fw) * img_w)
     h = int((fr["h"] / fh) * img_h)
-    # Keep guideline aspect as best as possible within rounding
     tgt_ar = fr["w"] / fr["h"]
     cur_ar = w / h if h else tgt_ar
     if abs(cur_ar - tgt_ar) > 1e-3:
@@ -43,7 +42,7 @@ def face_center(box):
     return ((x1 + x2) / 2.0, (y1 + y2) / 2.0)
 
 def choose_face_for_window(faces: List[Tuple[int,int,int,int]], l:int, t:int, w:int, h:int):
-    """Prefer a face that intersects the window; otherwise pick nearest to window center."""
+    """Prefer a face that intersects the window; otherwise pick nearest to window center, tie-break by area."""
     if not faces:
         return None
     window = (l, t, l + w, t + h)
@@ -87,26 +86,17 @@ def clamp_crop_from_center(cx, cy, wz, hz, iw, ih, sx, sy):
     return l2, t2
 
 def minimal_outside_rect_containing(w, h, ar):
-    """
-    Minimal rectangle of aspect 'ar' that contains a w×h rectangle.
-    Returns (W,H).
-    """
-    # candidate widen by width
+    """Minimal rectangle of aspect 'ar' that contains a w×h rectangle. Returns (W,H)."""
     H1 = max(h, math.ceil(w / ar))
     W1 = math.ceil(H1 * ar)
-    # candidate widen by height
     W2 = max(w, math.ceil(h * ar))
     H2 = math.ceil(W2 / ar)
-    # choose minimal area
     if W1 * H1 <= W2 * H2:
         return int(W1), int(H1)
     return int(W2), int(H2)
 
 def maximal_inside_rect(w, h, ar):
-    """
-    Maximal rectangle of aspect 'ar' that fits inside a w×h rectangle.
-    Returns (W,H).
-    """
+    """Maximal rectangle of aspect 'ar' that fits inside a w×h rectangle. Returns (W,H)."""
     if ar >= w / h:
         W = w
         H = int(round(W / ar))
@@ -125,7 +115,6 @@ def centered_custom_base(rec: dict, img_w: int, img_h: int, cw: int, ch: int) ->
     cx, cy = l + w // 2, t + h // 2
     ar = cw / ch
 
-    # Compare target area vs guideline output area using effectivePpi
     ex, ey = rec["effectivePpi"]["x"], rec["effectivePpi"]["y"]
     out_w = int(rec["frame"]["w"] * ex / 72)
     out_h = int(rec["frame"]["h"] * ey / 72)
@@ -133,11 +122,10 @@ def centered_custom_base(rec: dict, img_w: int, img_h: int, cw: int, ch: int) ->
     guide_area  = out_w * out_h
 
     if target_area <= guide_area:
-        W, H = maximal_inside_rect(w, h, ar)          # trim equally (centered)
+        W, H = maximal_inside_rect(w, h, ar)              # trim equally (centered)
     else:
-        W, H = minimal_outside_rect_containing(w, h, ar)  # add around (centered)
+        W, H = minimal_outside_rect_containing(w, h, ar)   # add around (centered)
 
-    # Center on guideline center, clamp to image bounds
     L = max(0, min(int(round(cx - W / 2)), img_w - W))
     T = max(0, min(int(round(cy - H / 2)), img_h - H))
     return L, T, int(W), int(H)
@@ -230,97 +218,102 @@ if custom_sizes:
         sx_key   = f"sx_{key_root}"
         sy_key   = f"sy_{key_root}"
 
-with tab:
-    key_root = f"{cw}x{ch}"
-    base_key = f"base_{key_root}"
-    fa_key   = f"face_{key_root}"
-    z_key    = f"zoom_{key_root}"
-    sx_key   = f"sx_{key_root}"
-    sy_key   = f"sy_{key_root}"
+        with tab:
+            # Face-aware toggle
+            face_on = st.checkbox("Face-aware for this size", value=True, key=fa_key)
 
-    # Face-aware toggle per size (leave where you prefer; here above preview)
-    face_on = st.checkbox("Face-aware for this size", value=True, key=fa_key)
+            # Recompute base if toggle changed OR base absent
+            rec = min(records, key=lambda r: abs((cw / ch) - r["frame"]["w"] / r["frame"]["h"]))
+            recompute_base = True
+            if base_key in st.session_state and f"{base_key}_fa" in st.session_state:
+                recompute_base = (st.session_state[f"{base_key}_fa"] != face_on)
+            if recompute_base or base_key not in st.session_state:
+                l0, t0, wb, hb = centered_custom_base(rec, iw, ih, cw, ch)
+                if face_on:
+                    chosen_face = choose_face_for_window(faces, l0, t0, wb, hb)
+                    l0, t0, wb, hb = adjust_crop_to_include_face(l0, t0, wb, hb, chosen_face, iw, ih)
+                st.session_state[base_key] = (l0, t0, wb, hb)
+                st.session_state[f"{base_key}_fa"] = face_on
+            else:
+                l0, t0, wb, hb = st.session_state[base_key]
 
-    # Build/persist the base window (centered to guideline; optional face shift)
-    rec = min(records, key=lambda r: abs((cw / ch) - r["frame"]["w"] / r["frame"]["h"]))
-    recompute_base = True
-    if base_key in st.session_state and f"{base_key}_fa" in st.session_state:
-        recompute_base = (st.session_state[f"{base_key}_fa"] != face_on)
-    if recompute_base or base_key not in st.session_state:
-        l0, t0, wb, hb = centered_custom_base(rec, iw, ih, cw, ch)
-        if face_on:
-            chosen_face = choose_face_for_window(faces, l0, t0, wb, hb)
-            l0, t0, wb, hb = adjust_crop_to_include_face(l0, t0, wb, hb, chosen_face, iw, ih)
-        st.session_state[base_key] = (l0, t0, wb, hb)
-        st.session_state[f"{base_key}_fa"] = face_on
-    else:
-        l0, t0, wb, hb = st.session_state[base_key]
+            # Create containers in visual order (Preview first), then fill them later
+            preview_box = st.container()
+            # height and width rows with 2 columns each (slider + number input side-by-side)
+            height_row = st.container()
+            width_row  = st.container()
+            # zoom row at bottom with 2 columns
+            zoom_row   = st.container()
 
-    # --- Create containers in the *visual* order you want ---
-    preview_box = st.container()
-    height_box  = st.container()
-    width_box   = st.container()
-    zoom_box    = st.container()   # visually last
+            # Defaults in session
+            st.session_state.setdefault(z_key, 0)
+            st.session_state.setdefault(sx_key, 0)
+            st.session_state.setdefault(sy_key, 0)
 
-    # Defaults
-    st.session_state.setdefault(z_key, 0)
-    st.session_state.setdefault(sx_key, 0)
-    st.session_state.setdefault(sy_key, 0)
+            # ---------------- Fill ZOOM row FIRST (compute order) ----------------
+            with zoom_row:
+                zcol1, zcol2 = st.columns([3, 1])
+                zoom_floor = max(wb / iw, hb / ih, 1.0)  # ensure window <= image
+                zd_prev = int(st.session_state[z_key])
+                with zcol1:
+                    zd_slider = st.slider("Zoom ±10%", -10, 10, zd_prev, 1, key=f"zslider_{key_root}")
+                with zcol2:
+                    zd_num = st.number_input("Zoom%", -10, 10, zd_slider, 1, key=f"znum_{key_root}", label_visibility="collapsed")
+                zd = int(zd_num if zd_num != zd_slider else zd_slider)
+                st.session_state[z_key] = zd
+                zoom_user = 1 + zd / 100.0
+                zoom = max(zoom_floor, zoom_user)
 
-    # 1) FILL ZOOM BOX FIRST (code order) so ranges are correct this run
-    with zoom_box:
-        # Zoom floor to ensure crop window fits image
-        zoom_floor = max(wb / iw, hb / ih, 1.0)
-        zd_prev = int(st.session_state[z_key])
-        zd_slider = st.slider("Zoom ±10%", -10, 10, zd_prev, 1, key=f"zslider_{key_root}")
-        zd_num    = st.number_input("Zoom%", -10, 10, zd_slider, 1, key=f"znum_{key_root}", label_visibility="collapsed")
-        zd = int(zd_num if zd_num != zd_slider else zd_slider)
-        st.session_state[z_key] = zd
-        zoom_user = 1 + zd / 100.0
-        zoom = max(zoom_floor, zoom_user)
+            # Geometry from base + zoom (now accurate for this run)
+            wz, hz = int(wb / zoom), int(hb / zoom)
+            cx, cy = l0 + wb // 2, t0 + hb // 2
 
-    # Geometry from base + zoom (needed for offset ranges)
-    wz, hz = int(wb / zoom), int(hb / zoom)
-    cx, cy = l0 + wb // 2, t0 + hb // 2
-    min_x = -cx + wz // 2
-    max_x =  iw - (cx + wz // 2)
-    min_y = -cy + hz // 2
-    max_y =  ih - (cy + hz // 2)
+            # Legal movement ranges
+            min_x = -cx + wz // 2
+            max_x =  iw - (cx + wz // 2)
+            min_y = -cy + hz // 2
+            max_y =  ih - (cy + hz // 2)
 
-    # Read previous offsets, clamp to legal range BEFORE rendering widgets
-    sx_prev = int(st.session_state[sx_key])
-    sy_prev = int(st.session_state[sy_key])
-    sx_prev = max(min_x, min(sx_prev, max_x))
-    sy_prev = max(min_y, min(sy_prev, max_y))
+            # Read previous offsets, clamp BEFORE rendering widgets
+            sx_prev = int(st.session_state[sx_key])
+            sy_prev = int(st.session_state[sy_key])
+            sx_prev = max(min_x, min(sx_prev, max_x))
+            sy_prev = max(min_y, min(sy_prev, max_y))
 
-    # 2) HEIGHT controls (shown under preview)
-    with height_box:
-        if min_y < max_y:
-            sy_slider = st.slider("Height Offset", min_y, max_y, sy_prev, 1, key=f"syslider_{key_root}")
-            sy_num    = st.number_input("Height", min_y, max_y, sy_slider, 1, key=f"synum_{key_root}", label_visibility="collapsed")
-            sy = int(sy_num if sy_num != sy_slider else sy_slider)
-        else:
-            sy = 0
-        st.session_state[sy_key] = sy
+            # ---------------- HEIGHT row ----------------
+            with height_row:
+                if min_y < max_y:
+                    hcol1, hcol2 = st.columns([3, 1])
+                    with hcol1:
+                        sy_slider = st.slider("Height Offset", min_y, max_y, sy_prev, 1, key=f"syslider_{key_root}")
+                    with hcol2:
+                        sy_num = st.number_input("Height", min_y, max_y, sy_slider, 1, key=f"synum_{key_root}", label_visibility="collapsed")
+                    sy = int(sy_num if sy_num != sy_slider else sy_slider)
+                else:
+                    sy = 0
+                st.session_state[sy_key] = sy
 
-    # 3) WIDTH controls
-    with width_box:
-        if min_x < max_x:
-            sx_slider = st.slider("Width Offset", min_x, max_x, sx_prev, 1, key=f"sxslider_{key_root}")
-            sx_num    = st.number_input("Width", min_x, max_x, sx_slider, 1, key=f"sxnum_{key_root}", label_visibility="collapsed")
-            sx = int(sx_num if sx_num != sx_slider else sx_slider)
-        else:
-            sx = 0
-        st.session_state[sx_key] = sx
+            # ---------------- WIDTH row ----------------
+            with width_row:
+                if min_x < max_x:
+                    wcol1, wcol2 = st.columns([3, 1])
+                    with wcol1:
+                        sx_slider = st.slider("Width Offset", min_x, max_x, sx_prev, 1, key=f"sxslider_{key_root}")
+                    with wcol2:
+                        sx_num = st.number_input("Width", min_x, max_x, sx_slider, 1, key=f"sxnum_{key_root}", label_visibility="collapsed")
+                    sx = int(sx_num if sx_num != sx_slider else sx_slider)
+                else:
+                    sx = 0
+                st.session_state[sx_key] = sx
 
-    # 4) Finally, render the preview *above* using the just-updated values
-    l2, t2 = clamp_crop_from_center(cx, cy, wz, hz, iw, ih, st.session_state[sx_key], st.session_state[sy_key])
-    prev = img.crop((l2, t2, l2 + wz, t2 + hz)).resize((cw, ch))
-    with preview_box:
-        st.image(prev, caption=f"Preview {cw}×{ch}", use_container_width=True)
+            # ---------------- PREVIEW (compute after widgets; clamp) ----------------
+            l2, t2 = clamp_crop_from_center(cx, cy, wz, hz, iw, ih, st.session_state[sx_key], st.session_state[sy_key])
+            prev = img.crop((l2, t2, l2 + wz, t2 + hz)).resize((cw, ch))
+            with preview_box:
+                st.image(prev, caption=f"Preview {cw}×{ch}", use_container_width=True)
 
-    # Persist for export (WYSIWYG)
-    shifts[(cw, ch)] = (st.session_state[sx_key], st.session_state[sy_key], zoom, face_on)
+            # Persist for export (WYSIWYG)
+            shifts[(cw, ch)] = (st.session_state[sx_key], st.session_state[sy_key], zoom, face_on)
 
 # ——————————————————————————————————————————————————————————
 # Generate ZIP (JPEG with ICC); uses SAME persisted base windows
@@ -341,18 +334,16 @@ with zipfile.ZipFile(zip_buf, "w") as zf:
         tmp.seek(0)
         zf.writestr(f"Guidelines/{rec['template']}_{ow}x{oh}.jpg", tmp.getvalue())
 
-    # Custom crops (WYSIWYG + per-size Face-aware)
+    # Custom crops (Face-aware toggle respected; WYSIWYG)
     for cw, ch in custom_sizes:
         key_root = f"{cw}x{ch}"
         base_key = f"base_{key_root}"
         fa_on = st.session_state.get(f"face_{key_root}", True)
 
         rec = min(records, key=lambda r: abs((cw / ch) - r["frame"]["w"] / r["frame"]["h"]))
-
         if base_key in st.session_state:
             l0, t0, wb, hb = st.session_state[base_key]
         else:
-            # Fallback: recompute with current toggle
             l0, t0, wb, hb = centered_custom_base(rec, iw, ih, cw, ch)
             if fa_on:
                 chosen_face = choose_face_for_window(faces, l0, t0, wb, hb)
