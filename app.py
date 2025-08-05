@@ -12,13 +12,22 @@ import math
 # Canonical guideline categories (width / height aspect ratios)
 # TODO: Replace Portrait and Landscape with the client’s exact ratios.
 CANON = {
-    "Portrait": 0.80,                 # e.g., 4:5 -> 0.8  (REPLACE if different)
-    "Landscape": 1.50,                # e.g., 3:2 -> 1.5  (REPLACE if different)
+    "Portrait": 0.70,                 # e.g., 4:5 -> 0.8  (REPLACE if different)
+    "Landscape": 1.40,                # e.g., 3:2 -> 1.5  (REPLACE if different)
     "Square": 1.00,
     "Vertical 2x5": 2/5,              # 0.4
     "Extreme Vertical 1x4": 1/4,      # 0.25
     "Extreme Landscape 3x1": 3.0,
     "Extreme Landscape 4x1": 4.0,
+}
+CANON_LABEL = {
+    "Portrait": "4:5",
+    "Landscape": "3:2",
+    "Square": "1:1",
+    "Vertical 2x5": "2:5",
+    "Extreme Vertical 1x4": "1:4",
+    "Extreme Landscape 3x1": "3:1",
+    "Extreme Landscape 4x1": "4:1",
 }
 
 def closest_canon_name(ar: float) -> str:
@@ -200,13 +209,11 @@ for rec in guidelines:
     w_pt, h_pt = rec["frame"]["w"], rec["frame"]["h"]
     ex, ey = rec["effectivePpi"]["x"], rec["effectivePpi"]["y"]
     w_px, h_px = int(w_pt * ex / 72), int(h_pt * ey / 72)
-    canon = closest_canon_name(w_pt / h_pt)
     gtable.append({
         "Template": rec["template"],
         "Width_px": w_px,
         "Height_px": h_px,
         "AR": round(w_px / h_px, 3),
-        "Canonical": canon,
     })
 st.dataframe(pd.DataFrame(gtable), use_container_width=True)
 
@@ -216,11 +223,12 @@ ctable = []
 for cw, ch in custom_sizes:
     canon = closest_canon_name(cw / ch)
     nearest_for_size[(cw, ch)] = canon
+    label = CANON_LABEL[canon]
     recommended = canon in available_canonical
     ctable.append({
         "Size": f"{cw}×{ch}",
         "AR": round(cw / ch, 3),
-        "Nearest Guideline": canon,
+        "Nearest Guideline": label,  # e.g., "2:5", "1:4", "3:1"
         "Recommended": "Yes" if recommended else "⚠️ Not recommended (missing guideline)",
     })
 st.dataframe(pd.DataFrame(ctable), use_container_width=True)
@@ -344,11 +352,11 @@ if custom_sizes:
             l2, t2 = clamp_crop_from_center(cx, cy, wz, hz, iw, ih, st.session_state[sx_key], st.session_state[sy_key])
             prev = img.crop((l2, t2, l2 + wz, t2 + hz)).resize((cw, ch))
             with preview_box:
-                # Per-size warning if nearest canonical guideline is not available for this asset
                 canon = nearest_for_size[(cw, ch)]
+                label = CANON_LABEL[canon]
                 if canon not in available_canonical:
-                    st.warning(f"{canon} is not recommended for this asset (no matching guideline).")
-                st.image(prev, caption=f"Preview {cw}×{ch} — {canon}", use_container_width=True)
+                    st.warning(f"{label} is not recommended for this asset (no matching guideline).")
+                st.image(prev, caption=f"Preview {cw}×{ch} — {label}", use_container_width=True)
 
             # Persist for export
             shifts[(cw, ch)] = (st.session_state[sx_key], st.session_state[sy_key], zoom, face_on)
