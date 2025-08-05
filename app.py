@@ -43,37 +43,28 @@ def adjust_crop_to_include_face(l, t, w, h, face_box, iw, ih):
         return l, t, w, h
     fx1, fy1, fx2, fy2 = face_box
     crop_x1, crop_y1, crop_x2, crop_y2 = l, t, l + w, t + h
-    # If face is already fully inside crop, no change needed
-    if (fx1 >= crop_x1 and fx2 <= crop_x2 and
-        fy1 >= crop_y1 and fy2 <= crop_y2):
+    if (fx1 >= crop_x1 and fx2 <= crop_x2 and fy1 >= crop_y1 and fy2 <= crop_y2):
         return l, t, w, h
-    # Compute needed shifts (separately for x and y)
     shift_x, shift_y = 0, 0
-    if fx1 < crop_x1:
-        shift_x = fx1 - crop_x1
-    elif fx2 > crop_x2:
-        shift_x = fx2 - crop_x2
-    if fy1 < crop_y1:
-        shift_y = fy1 - crop_y1
-    elif fy2 > crop_y2:
-        shift_y = fy2 - crop_y2
-    # Apply shifts but don't go out of image bounds
+    if fx1 < crop_x1: shift_x = fx1 - crop_x1
+    elif fx2 > crop_x2: shift_x = fx2 - crop_x2
+    if fy1 < crop_y1: shift_y = fy1 - crop_y1
+    elif fy2 > crop_y2: shift_y = fy2 - crop_y2
     new_l = min(max(l + shift_x, 0), iw - w)
     new_t = min(max(t + shift_y, 0), ih - h)
     return new_l, new_t, w, h
 
+def clamp_crop(cx, cy, wz, hz, iw, ih, sx, sy):
+    """Apply clamping logic used in export for preview consistency."""
+    l2 = max(0, min(cx - wz // 2 + sx, iw - wz))
+    t2 = max(0, min(cy - hz // 2 + sy, ih - hz))
+    return l2, t2
+
 # ——————————————————————————————————————————————————————————
 # Streamlit page config
 # ——————————————————————————————————————————————————————————
-st.set_page_config(
-    page_title="Smart Crop Automation Prototype", 
-    layout="wide", 
-    initial_sidebar_state="expanded"
-)
-st.markdown(
-    "<style>[data-testid='stSidebar']{min-width:450px!important;max-width:450px!important;}</style>", 
-    unsafe_allow_html=True
-)
+st.set_page_config(page_title="Smart Crop Automation Prototype", layout="wide", initial_sidebar_state="expanded")
+st.markdown("<style>[data-testid='stSidebar']{min-width:450px!important;max-width:450px!important;}</style>", unsafe_allow_html=True)
 st.title("Smart Crop Automation Prototype")
 
 # ——————————————————————————————————————————————————————————
@@ -84,16 +75,8 @@ json_file = st.sidebar.file_uploader("Guidelines JSON", type="json")
 image_file = st.sidebar.file_uploader("Master Image", type=["png", "jpg", "jpeg", "tif", "tiff"])
 
 with st.sidebar.expander("⚙️ Custom Crops", expanded=True):
-    df_editor = st.data_editor(
-        pd.DataFrame([{"Width_px": None, "Height_px": None}]),
-        hide_index=True,
-        num_rows="dynamic"
-    )
-    custom_sizes: List[Tuple[int, int]] = [
-        (int(r.Width_px), int(r.Height_px))
-        for r in df_editor.itertuples()
-        if pd.notna(r.Width_px) and pd.notna(r.Height_px)
-    ]
+    df_editor = st.data_editor(pd.DataFrame([{"Width_px": None, "Height_px": None}]), hide_index=True, num_rows="dynamic")
+    custom_sizes: List[Tuple[int, int]] = [(int(r.Width_px), int(r.Height_px)) for r in df_editor.itertuples() if pd.notna(r.Width_px) and pd.notna(r.Height_px)]
 
 # ——————————————————————————————————————————————————————————
 # Load matching guideline records
@@ -112,7 +95,6 @@ else:
 if not records:
     st.stop()
 
-# Remove master (offset=0) from guidelines list
 guidelines = [r for r in records if not (abs(r["imageOffset"]["x"]) < 1e-6 and abs(r["imageOffset"]["y"]) < 1e-6)]
 
 # ——————————————————————————————————————————————————————————
@@ -135,22 +117,20 @@ for cw, ch in custom_sizes:
 st.dataframe(pd.DataFrame(ctable), use_container_width=True)
 
 # ——————————————————————————————————————————————————————————
-# Load master image + FACE DETECTION (OpenCV)
+# Load master image + FACE DETECTION
 # ——————————————————————————————————————————————————————————
 img = Image.open(image_file)
 icc_profile = img.info.get("icc_profile")
 iw, ih = img.size
 
-# Face detection (run once, pick largest face if present)
 img_cv = np.array(img.convert("RGB"))
 gray = cv2.cvtColor(img_cv, cv2.COLOR_RGB2GRAY)
 casc = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
-faces = casc.detectMultiScale(gray, 1.1, 5, minSize=(30,30))
-if len(faces) > 0:
-    x, y, w, h = max(faces, key=lambda f: f[2]*f[3])
+faces = casc.detectMultiScale(gray, 1.1, 5, minSize=(30, 30))
+face_box = (max(faces, key=lambda f: f[2] * f[3]) if len(faces) > 0 else None)
+if face_box is not None:
+    x, y, w, h = face_box
     face_box = (x, y, x + w, y + h)
-else:
-    face_box = None
 
 # ——————————————————————————————————————————————————————————
 # Custom adjustment UI (face-aware)
@@ -163,101 +143,82 @@ if custom_sizes:
         with tab:
             base = min(records, key=lambda r: abs((cw / ch) - r["frame"]["w"] / r["frame"]["h"]))
             l0, t0, wb, hb = auto_custom_start(base, iw, ih, cw, ch)
-            # --- FACE-AWARE: shift default window if needed
             l0, t0, wb, hb = adjust_crop_to_include_face(l0, t0, wb, hb, face_box, iw, ih)
 
-            # Calculate default zoom and offset
-            z_key = f"zoom_{idx}"; st.session_state.setdefault(z_key, 0)
-            sx_key = f"sx_{idx}"; st.session_state.setdefault(sx_key, 0)
-            sy_key = f"sy_{idx}"; st.session_state.setdefault(sy_key, 0)
+            z_key, sx_key, sy_key = f"zoom_{idx}", f"sx_{idx}", f"sy_{idx}"
+            st.session_state.setdefault(z_key, 0)
+            st.session_state.setdefault(sx_key, 0)
+            st.session_state.setdefault(sy_key, 0)
 
-            # Calculate crop window before adjustments
             zoom = 1 + st.session_state[z_key] / 100
             wz, hz = int(wb / zoom), int(hb / zoom)
             cx, cy = l0 + wb // 2, t0 + hb // 2
-            left_start, top_start = cx - wz // 2, cy - hz // 2
-            min_x, max_x = -left_start, iw - left_start - wz
-            min_y, max_y = -top_start, ih - top_start - hz
+            min_x, max_x = -cx + wz // 2, iw - (cx + wz // 2)
+            min_y, max_y = -cy + hz // 2, ih - (cy + hz // 2)
 
-            # Use session values for offset and zoom
-            sx = st.session_state[sx_key]
-            sy = st.session_state[sy_key]
-            zd = st.session_state[z_key]
+            sx, sy, zd = st.session_state[sx_key], st.session_state[sy_key], st.session_state[z_key]
 
-            # Preview before sliders
-            x0, y0 = left_start + sx, top_start + sy
-            prev = img.crop((x0, y0, x0 + wz, y0 + hz)).resize((cw, ch))
+            # ✅ Apply clamping for preview
+            l2, t2 = clamp_crop(cx, cy, wz, hz, iw, ih, sx, sy)
+            prev = img.crop((l2, t2, l2 + wz, t2 + hz)).resize((cw, ch))
             st.image(prev, caption=f"Preview {cw}×{ch}", width=600)
 
-            # Height offset sliders
             colh1, colh2 = st.columns([3, 1])
-            if min_y == max_y:
-                pass  # Hide both slider and number box if shifting is not possible
-            else:
+            if min_y != max_y:
                 with colh1:
-                    sy = st.slider("Height Offset", min_y, max_y, st.session_state[sy_key], 1, key=f"syslider_{idx}")
+                    sy = st.slider("Height Offset", min_y, max_y, sy, 1, key=f"syslider_{idx}")
                 with colh2:
                     sy = st.number_input("Height", min_y, max_y, sy, 1, key=f"synum_{idx}", label_visibility="collapsed")
             st.session_state[sy_key] = sy if min_y != max_y else 0
-            
-            # Width offset sliders
+
             colw1, colw2 = st.columns([3, 1])
-            if min_x == max_x:
-                pass  # Hide both slider and number box if shifting is not possible
-            else:
+            if min_x != max_x:
                 with colw1:
-                    sx = st.slider("Width Offset", min_x, max_x, st.session_state[sx_key], 1, key=f"sxslider_{idx}")
+                    sx = st.slider("Width Offset", min_x, max_x, sx, 1, key=f"sxslider_{idx}")
                 with colw2:
                     sx = st.number_input("Width", min_x, max_x, sx, 1, key=f"sxnum_{idx}", label_visibility="collapsed")
             st.session_state[sx_key] = sx if min_x != max_x else 0
-            
-            # Zoom control sliders (always last)
+
             colz1, colz2 = st.columns([3, 1])
             with colz1:
-                zd = st.slider("Zoom ±10%", -10, 10, st.session_state[z_key], 1, key=f"zslider_{idx}")
+                zd = st.slider("Zoom ±10%", -10, 10, zd, 1, key=f"zslider_{idx}")
             with colz2:
                 zd = st.number_input("Zoom%", -10, 10, zd, 1, key=f"znum_{idx}", label_visibility="collapsed")
             st.session_state[z_key] = zd
 
-            # Save for ZIP generation
             shifts[(cw, ch)] = (sx, sy, 1 + zd / 100)
 
 # ——————————————————————————————————————————————————————————
-# Generate ZIP (ALL JPG WITH ICC)
+# Generate ZIP (JPEG with ICC)
 # ——————————————————————————————————————————————————————————
 zip_buf = BytesIO()
 with zipfile.ZipFile(zip_buf, "w") as zf:
-    # Guideline crops (JPG+ICC)
     for rec in guidelines:
         ow = int(rec["frame"]["w"] * rec["effectivePpi"]["x"] / 72)
         oh = int(rec["frame"]["h"] * rec["effectivePpi"]["y"] / 72)
         l, t, wb, hb = compute_crop(rec, iw, ih)
         gcrop = img.crop((l, t, l + wb, t + hb)).resize((ow, oh))
         tmp = BytesIO()
-        save_kwargs = {}
-        if icc_profile is not None:
+        save_kwargs = {"quality": 95, "subsampling": 0}
+        if icc_profile:
             save_kwargs["icc_profile"] = icc_profile
-        gcrop.save(tmp, format="JPEG", quality=95, subsampling=0, optimize=True, **save_kwargs)
+        gcrop.save(tmp, format="JPEG", **save_kwargs)
         tmp.seek(0)
         zf.writestr(f"Guidelines/{rec['template']}_{ow}x{oh}.jpg", tmp.getvalue())
 
-    # Custom crops (JPG+ICC)
     for cw, ch in custom_sizes:
         base = min(records, key=lambda r: abs((cw / ch) - r["frame"]["w"] / r["frame"]["h"]))
         l, t, wb, hb = auto_custom_start(base, iw, ih, cw, ch)
-        # (OPTIONAL: apply face adjust for export too by uncommenting below)
-        # l, t, wb, hb = adjust_crop_to_include_face(l, t, wb, hb, face_box, iw, ih)
         sx, sy, zoom = shifts.get((cw, ch), (0, 0, 1))
         wz, hz = int(wb / zoom), int(hb / zoom)
         cx, cy = l + wb // 2, t + hb // 2
-        l2 = max(0, min(cx - wz // 2 + sx, iw - wz))
-        t2 = max(0, min(cy - hz // 2 + sy, ih - hz))
+        l2, t2 = clamp_crop(cx, cy, wz, hz, iw, ih, sx, sy)
         ccrop = img.crop((l2, t2, l2 + wz, t2 + hz)).resize((cw, ch))
         tmp = BytesIO()
-        save_kwargs = {}
-        if icc_profile is not None:
+        save_kwargs = {"quality": 95, "subsampling": 0}
+        if icc_profile:
             save_kwargs["icc_profile"] = icc_profile
-        ccrop.save(tmp, format="JPEG", quality=95, subsampling=0, optimize=True, **save_kwargs)
+        ccrop.save(tmp, format="JPEG", **save_kwargs)
         tmp.seek(0)
         zf.writestr(f"Custom/{cw}x{ch}.jpg", tmp.getvalue())
 
