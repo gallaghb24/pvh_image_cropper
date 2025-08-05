@@ -19,25 +19,19 @@ def compute_crop(rec: dict, img_w: int, img_h: int) -> Tuple[int, int, int, int]
     t = int((fy / fh) * img_h)
     w = int((fr["w"] / fw) * img_w)
     h = int((fr["h"] / fh) * img_h)
+    # Keep guideline aspect as best as possible within rounding
     tgt_ar = fr["w"] / fr["h"]
     cur_ar = w / h if h else tgt_ar
     if abs(cur_ar - tgt_ar) > 1e-3:
         if cur_ar > tgt_ar:  # too wide
-            new_w = int(h * tgt_ar)
+            new_w = int(round(h * tgt_ar))
             l += (w - new_w) // 2
             w = new_w
         else:  # too tall
-            new_h = int(w / tgt_ar)
+            new_h = int(round(w / tgt_ar))
             t += (h - new_h) // 2
             h = new_h
     return l, t, w, h
-
-def auto_custom_start(rec: dict, img_w: int, img_h: int, cw: int, ch: int) -> Tuple[int, int, int, int]:
-    """Start from guideline crop, then adapt to target aspect by trimming height only (keep width)."""
-    l, t, w, h = compute_crop(rec, img_w, img_h)
-    new_h = int(w / (cw / ch))
-    t += (h - new_h) // 2
-    return l, t, w, new_h
 
 def boxes_intersect(a, b) -> bool:
     ax1, ay1, ax2, ay2 = a
@@ -49,7 +43,7 @@ def face_center(box):
     return ((x1 + x2) / 2.0, (y1 + y2) / 2.0)
 
 def choose_face_for_window(faces: List[Tuple[int,int,int,int]], l:int, t:int, w:int, h:int):
-    """Prefer a face that intersects the window; else pick the face nearest the window center."""
+    """Prefer a face that intersects the window; otherwise pick nearest to window center."""
     if not faces:
         return None
     window = (l, t, l + w, t + h)
@@ -69,19 +63,19 @@ def choose_face_for_window(faces: List[Tuple[int,int,int,int]], l:int, t:int, w:
     return pool[0]
 
 def adjust_crop_to_include_face(l, t, w, h, face_box, iw, ih):
-    """Shift crop window minimally so the face box fits inside (if possible). Only shifts; no resize/zoom."""
+    """Shift crop window minimally so the face box fits inside (if possible). Only shifts; never resizes/zooms."""
     if face_box is None:
         return l, t, w, h
     fx1, fy1, fx2, fy2 = face_box
-    crop_x1, crop_y1, crop_x2, crop_y2 = l, t, l + w, t + h
-    if (fx1 >= crop_x1 and fx2 <= crop_x2 and fy1 >= crop_y1 and fy2 <= crop_y2):
+    x1, y1, x2, y2 = l, t, l + w, t + h
+    if (fx1 >= x1 and fx2 <= x2 and fy1 >= y1 and fy2 <= y2):
         return l, t, w, h
     shift_x = 0
     shift_y = 0
-    if fx1 < crop_x1: shift_x = fx1 - crop_x1
-    elif fx2 > crop_x2: shift_x = fx2 - crop_x2
-    if fy1 < crop_y1: shift_y = fy1 - crop_y1
-    elif fy2 > crop_y2: shift_y = fy2 - crop_y2
+    if fx1 < x1: shift_x = fx1 - x1
+    elif fx2 > x2: shift_x = fx2 - x2
+    if fy1 < y1: shift_y = fy1 - y1
+    elif fy2 > y2: shift_y = fy2 - y2
     new_l = min(max(l + shift_x, 0), iw - w)
     new_t = min(max(t + shift_y, 0), ih - h)
     return new_l, new_t, w, h
@@ -91,6 +85,62 @@ def clamp_crop_from_center(cx, cy, wz, hz, iw, ih, sx, sy):
     l2 = max(0, min(cx - wz // 2 + sx, iw - wz))
     t2 = max(0, min(cy - hz // 2 + sy, ih - hz))
     return l2, t2
+
+def minimal_outside_rect_containing(w, h, ar):
+    """
+    Minimal rectangle of aspect 'ar' that contains a w×h rectangle.
+    Returns (W,H).
+    """
+    # candidate widen by width
+    H1 = max(h, math.ceil(w / ar))
+    W1 = math.ceil(H1 * ar)
+    # candidate widen by height
+    W2 = max(w, math.ceil(h * ar))
+    H2 = math.ceil(W2 / ar)
+    # choose minimal area
+    if W1 * H1 <= W2 * H2:
+        return int(W1), int(H1)
+    return int(W2), int(H2)
+
+def maximal_inside_rect(w, h, ar):
+    """
+    Maximal rectangle of aspect 'ar' that fits inside a w×h rectangle.
+    Returns (W,H).
+    """
+    if ar >= w / h:
+        W = w
+        H = int(round(W / ar))
+    else:
+        H = h
+        W = int(round(H * ar))
+    return int(W), int(H)
+
+def centered_custom_base(rec: dict, img_w: int, img_h: int, cw: int, ch: int) -> Tuple[int,int,int,int]:
+    """
+    Start from guideline, then:
+      - if custom area <= guideline output area -> INSIDE (trim), centered
+      - else -> OUTSIDE (expand), centered (then clamped to image bounds)
+    """
+    l, t, w, h = compute_crop(rec, img_w, img_h)
+    cx, cy = l + w // 2, t + h // 2
+    ar = cw / ch
+
+    # Compare target area vs guideline output area using effectivePpi
+    ex, ey = rec["effectivePpi"]["x"], rec["effectivePpi"]["y"]
+    out_w = int(rec["frame"]["w"] * ex / 72)
+    out_h = int(rec["frame"]["h"] * ey / 72)
+    target_area = cw * ch
+    guide_area  = out_w * out_h
+
+    if target_area <= guide_area:
+        W, H = maximal_inside_rect(w, h, ar)          # trim equally (centered)
+    else:
+        W, H = minimal_outside_rect_containing(w, h, ar)  # add around (centered)
+
+    # Center on guideline center, clamp to image bounds
+    L = max(0, min(int(round(cx - W / 2)), img_w - W))
+    T = max(0, min(int(round(cy - H / 2)), img_h - H))
+    return L, T, int(W), int(H)
 
 # ——————————————————————————————————————————————————————————
 # Streamlit page config
@@ -130,7 +180,7 @@ if not records:
 guidelines = [r for r in records if not (abs(r["imageOffset"]["x"]) < 1e-6 and abs(r["imageOffset"]["y"]) < 1e-6)]
 
 # ——————————————————————————————————————————————————————————
-# Display guideline + custom tables
+# Tables
 # ——————————————————————————————————————————————————————————
 st.subheader("Guideline Crops")
 gtable = []
@@ -149,7 +199,7 @@ for cw, ch in custom_sizes:
 st.dataframe(pd.DataFrame(ctable), use_container_width=True)
 
 # ——————————————————————————————————————————————————————————
-# Load master image + FACE DETECTION
+# Load image + faces
 # ——————————————————————————————————————————————————————————
 img = Image.open(image_file)
 icc_profile = img.info.get("icc_profile")
@@ -165,7 +215,7 @@ if len(faces_np) > 0:
         faces.append((int(x), int(y), int(x + w), int(y + h)))  # x1,y1,x2,y2
 
 # ——————————————————————————————————————————————————————————
-# Custom adjustment UI (FaceAware + WYSIWYG + robust widgets)
+# UI: per-size FaceAware toggle, robust widgets, WYSIWYG
 # ——————————————————————————————————————————————————————————
 shifts = {}
 if custom_sizes:
@@ -175,31 +225,40 @@ if custom_sizes:
     for ((cw, ch), tab) in zip(custom_sizes, tabs):
         key_root = f"{cw}x{ch}"
         base_key = f"base_{key_root}"
-        z_key   = f"zoom_{key_root}"
-        sx_key  = f"sx_{key_root}"
-        sy_key  = f"sy_{key_root}"
+        fa_key   = f"face_{key_root}"
+        z_key    = f"zoom_{key_root}"
+        sx_key   = f"sx_{key_root}"
+        sy_key   = f"sy_{key_root}"
 
         with tab:
-            # Persist the post–FaceAware base window (WYSIWYG)
-            if base_key not in st.session_state:
-                base = min(records, key=lambda r: abs((cw / ch) - r["frame"]["w"] / r["frame"]["h"]))
-                l0, t0, wb, hb = auto_custom_start(base, iw, ih, cw, ch)
-                chosen_face = choose_face_for_window(faces, l0, t0, wb, hb)
-                l0, t0, wb, hb = adjust_crop_to_include_face(l0, t0, wb, hb, chosen_face, iw, ih)
+            # Face-aware toggle per custom size
+            face_on = st.checkbox("Face-aware for this size", value=True, key=fa_key)
+
+            # Recompute base if not present OR if the toggle changed this run
+            rec = min(records, key=lambda r: abs((cw / ch) - r["frame"]["w"] / r["frame"]["h"]))
+            recompute_base = True
+            if base_key in st.session_state and f"{base_key}_fa" in st.session_state:
+                recompute_base = (st.session_state[f"{base_key}_fa"] != face_on)
+
+            if recompute_base or base_key not in st.session_state:
+                l0, t0, wb, hb = centered_custom_base(rec, iw, ih, cw, ch)
+                if face_on:
+                    chosen_face = choose_face_for_window(faces, l0, t0, wb, hb)
+                    l0, t0, wb, hb = adjust_crop_to_include_face(l0, t0, wb, hb, chosen_face, iw, ih)
                 st.session_state[base_key] = (l0, t0, wb, hb)
+                st.session_state[f"{base_key}_fa"] = face_on
             else:
                 l0, t0, wb, hb = st.session_state[base_key]
 
-            # Defaults in session
-            st.session_state.setdefault(z_key, 0)   # zoom delta in %
-            st.session_state.setdefault(sx_key, 0)  # width offset
-            st.session_state.setdefault(sy_key, 0)  # height offset
+            # Defaults
+            st.session_state.setdefault(z_key, 0)
+            st.session_state.setdefault(sx_key, 0)
+            st.session_state.setdefault(sy_key, 0)
 
-            # ---- WIDGETS FIRST (source of truth) ----
-            # Zoom floor to keep window <= image
+            # ——— Widgets first ———
+            # Zoom floor: keep window <= image
             zoom_floor = max(wb / iw, hb / ih, 1.0)
             zd_prev = int(st.session_state[z_key])
-
             zd_slider = st.slider("Zoom ±10%", -10, 10, zd_prev, 1, key=f"zslider_{key_root}")
             zd_num    = st.number_input("Zoom%", -10, 10, zd_slider, 1, key=f"znum_{key_root}", label_visibility="collapsed")
             zd = int(zd_num if zd_num != zd_slider else zd_slider)
@@ -239,20 +298,20 @@ if custom_sizes:
                 sy = 0
             st.session_state[sy_key] = sy
 
-            # ---- NOW compute preview from the just-updated values ----
+            # Preview (compute after widgets; clamp)
             l2, t2 = clamp_crop_from_center(cx, cy, wz, hz, iw, ih, sx, sy)
             prev = img.crop((l2, t2, l2 + wz, t2 + hz)).resize((cw, ch))
             st.image(prev, caption=f"Preview {cw}×{ch}", use_container_width=True)
 
             # Persist for export
-            shifts[(cw, ch)] = (sx, sy, zoom)
+            shifts[(cw, ch)] = (sx, sy, zoom, face_on)
 
 # ——————————————————————————————————————————————————————————
-# Generate ZIP (JPEG with ICC); uses the SAME persisted base windows
+# Generate ZIP (JPEG with ICC); uses SAME persisted base windows
 # ——————————————————————————————————————————————————————————
 zip_buf = BytesIO()
 with zipfile.ZipFile(zip_buf, "w") as zf:
-    # Guideline crops (no face-aware by design)
+    # Guideline crops
     for rec in guidelines:
         ow = int(rec["frame"]["w"] * rec["effectivePpi"]["x"] / 72)
         oh = int(rec["frame"]["h"] * rec["effectivePpi"]["y"] / 72)
@@ -260,25 +319,30 @@ with zipfile.ZipFile(zip_buf, "w") as zf:
         gcrop = img.crop((l, t, l + wb, t + hb)).resize((ow, oh))
         tmp = BytesIO()
         save_kwargs = {"quality": 95, "subsampling": 0}
-        if icc_profile:
-            save_kwargs["icc_profile"] = icc_profile
+        icc = img.info.get("icc_profile")
+        if icc: save_kwargs["icc_profile"] = icc
         gcrop.save(tmp, format="JPEG", **save_kwargs)
         tmp.seek(0)
         zf.writestr(f"Guidelines/{rec['template']}_{ow}x{oh}.jpg", tmp.getvalue())
 
-    # Custom crops (FaceAware + WYSIWYG)
+    # Custom crops (WYSIWYG + per-size Face-aware)
     for cw, ch in custom_sizes:
         key_root = f"{cw}x{ch}"
         base_key = f"base_{key_root}"
+        fa_on = st.session_state.get(f"face_{key_root}", True)
+
+        rec = min(records, key=lambda r: abs((cw / ch) - r["frame"]["w"] / r["frame"]["h"]))
+
         if base_key in st.session_state:
             l0, t0, wb, hb = st.session_state[base_key]
         else:
-            base = min(records, key=lambda r: abs((cw / ch) - r["frame"]["w"] / r["frame"]["h"]))
-            l0, t0, wb, hb = auto_custom_start(base, iw, ih, cw, ch)
-            chosen_face = choose_face_for_window(faces, l0, t0, wb, hb)
-            l0, t0, wb, hb = adjust_crop_to_include_face(l0, t0, wb, hb, chosen_face, iw, ih)
+            # Fallback: recompute with current toggle
+            l0, t0, wb, hb = centered_custom_base(rec, iw, ih, cw, ch)
+            if fa_on:
+                chosen_face = choose_face_for_window(faces, l0, t0, wb, hb)
+                l0, t0, wb, hb = adjust_crop_to_include_face(l0, t0, wb, hb, chosen_face, iw, ih)
 
-        sx, sy, zoom = shifts.get((cw, ch), (0, 0, 1.0))
+        sx, sy, zoom, _fa = shifts.get((cw, ch), (0, 0, 1.0, fa_on))
         wz, hz = int(wb / zoom), int(hb / zoom)
         cx, cy = l0 + wb // 2, t0 + hb // 2
         l2, t2 = clamp_crop_from_center(cx, cy, wz, hz, iw, ih, sx, sy)
@@ -286,8 +350,8 @@ with zipfile.ZipFile(zip_buf, "w") as zf:
 
         tmp = BytesIO()
         save_kwargs = {"quality": 95, "subsampling": 0}
-        if icc_profile:
-            save_kwargs["icc_profile"] = icc_profile
+        icc = img.info.get("icc_profile")
+        if icc: save_kwargs["icc_profile"] = icc
         ccrop.save(tmp, format="JPEG", **save_kwargs)
         tmp.seek(0)
         zf.writestr(f"Custom/{cw}x{ch}.jpg", tmp.getvalue())
