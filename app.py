@@ -6,6 +6,7 @@ import zipfile
 from typing import List, Tuple
 import cv2
 import numpy as np
+import math
 
 # ——————————————————————————————————————————————————————————
 # Helper functions
@@ -32,30 +33,71 @@ def compute_crop(rec: dict, img_w: int, img_h: int) -> Tuple[int, int, int, int]
     return l, t, w, h
 
 def auto_custom_start(rec: dict, img_w: int, img_h: int, cw: int, ch: int) -> Tuple[int, int, int, int]:
+    """Start from guideline crop, then adapt to target aspect by trimming height only (keep width)."""
     l, t, w, h = compute_crop(rec, img_w, img_h)
     new_h = int(w / (cw / ch))
     t += (h - new_h) // 2
     return l, t, w, new_h
 
+def boxes_intersect(a, b) -> bool:
+    ax1, ay1, ax2, ay2 = a
+    bx1, by1, bx2, by2 = b
+    return not (ax2 <= bx1 or bx2 <= ax1 or ay2 <= by1 or by2 <= ay1)
+
+def face_center(box):
+    x1, y1, x2, y2 = box
+    return ( (x1 + x2) / 2.0, (y1 + y2) / 2.0 )
+
+def choose_face_for_window(faces: List[Tuple[int,int,int,int]], l:int, t:int, w:int, h:int):
+    """Prefer a face that intersects the current window; otherwise pick the face whose center is nearest to the window center."""
+    if not faces:
+        return None
+    window = (l, t, l + w, t + h)
+    cx, cy = l + w / 2.0, t + h / 2.0
+
+    intersecting = [f for f in faces if boxes_intersect(window, f)]
+    pool = intersecting if intersecting else faces
+
+    def score(box):
+        fx, fy = face_center(box)
+        # distance to window center; smaller is better
+        return (fx - cx) ** 2 + (fy - cy) ** 2
+
+    # tie-break by larger face if distances equal
+    def area(box):
+        x1,y1,x2,y2 = box
+        return (x2-x1)*(y2-y1)
+
+    pool.sort(key=lambda b: (score(b), -area(b)))
+    return pool[0]
+
 def adjust_crop_to_include_face(l, t, w, h, face_box, iw, ih):
-    """Shift crop window minimally so the face box fits inside (if possible)."""
+    """Shift crop window minimally so the face box fits inside (if possible). Only shifts, never resizes/zooms."""
     if face_box is None:
         return l, t, w, h
     fx1, fy1, fx2, fy2 = face_box
     crop_x1, crop_y1, crop_x2, crop_y2 = l, t, l + w, t + h
+    # Already inside?
     if (fx1 >= crop_x1 and fx2 <= crop_x2 and fy1 >= crop_y1 and fy2 <= crop_y2):
         return l, t, w, h
-    shift_x, shift_y = 0, 0
-    if fx1 < crop_x1: shift_x = fx1 - crop_x1
-    elif fx2 > crop_x2: shift_x = fx2 - crop_x2
-    if fy1 < crop_y1: shift_y = fy1 - crop_y1
-    elif fy2 > crop_y2: shift_y = fy2 - crop_y2
+    # Minimal shifts
+    shift_x = 0
+    shift_y = 0
+    if fx1 < crop_x1:
+        shift_x = fx1 - crop_x1
+    elif fx2 > crop_x2:
+        shift_x = fx2 - crop_x2
+    if fy1 < crop_y1:
+        shift_y = fy1 - crop_y1
+    elif fy2 > crop_y2:
+        shift_y = fy2 - crop_y2
+    # Clamp to image bounds
     new_l = min(max(l + shift_x, 0), iw - w)
     new_t = min(max(t + shift_y, 0), ih - h)
     return new_l, new_t, w, h
 
-def clamp_crop(cx, cy, wz, hz, iw, ih, sx, sy):
-    """Apply clamping logic used in export for preview consistency."""
+def clamp_crop_from_center(cx, cy, wz, hz, iw, ih, sx, sy):
+    """Compute top-left from center + offsets and clamp to image bounds."""
     l2 = max(0, min(cx - wz // 2 + sx, iw - wz))
     t2 = max(0, min(cy - hz // 2 + sy, ih - hz))
     return l2, t2
@@ -126,14 +168,14 @@ iw, ih = img.size
 img_cv = np.array(img.convert("RGB"))
 gray = cv2.cvtColor(img_cv, cv2.COLOR_RGB2GRAY)
 casc = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
-faces = casc.detectMultiScale(gray, 1.1, 5, minSize=(30, 30))
-face_box = (max(faces, key=lambda f: f[2] * f[3]) if len(faces) > 0 else None)
-if face_box is not None:
-    x, y, w, h = face_box
-    face_box = (x, y, x + w, y + h)
+faces_np = casc.detectMultiScale(gray, 1.1, 5, minSize=(30, 30))
+faces: List[Tuple[int,int,int,int]] = []
+if len(faces_np) > 0:
+    for (x, y, w, h) in faces_np:
+        faces.append((int(x), int(y), int(x + w), int(y + h)))  # x1,y1,x2,y2
 
 # ——————————————————————————————————————————————————————————
-# Custom adjustment UI (face-aware)
+# Custom adjustment UI (FaceAware + WYSIWYG)
 # ——————————————————————————————————————————————————————————
 shifts = {}
 if custom_sizes:
@@ -141,30 +183,43 @@ if custom_sizes:
     tabs = st.tabs([f"{w}×{h}" for w, h in custom_sizes])
     for idx, ((cw, ch), tab) in enumerate(zip(custom_sizes, tabs)):
         with tab:
-            base = min(records, key=lambda r: abs((cw / ch) - r["frame"]["w"] / r["frame"]["h"]))
-            l0, t0, wb, hb = auto_custom_start(base, iw, ih, cw, ch)
+            # ——— Persist the post–face-aware base window per size (WYSIWYG) ———
+            base_key = f"base_{cw}x{ch}"
+            if base_key not in st.session_state:
+                base = min(records, key=lambda r: abs((cw / ch) - r["frame"]["w"] / r["frame"]["h"]))
+                l0, t0, wb, hb = auto_custom_start(base, iw, ih, cw, ch)
+                # Pick a face that intersects or is nearest to this window
+                chosen_face = choose_face_for_window(faces, l0, t0, wb, hb)
+                l0, t0, wb, hb = adjust_crop_to_include_face(l0, t0, wb, hb, chosen_face, iw, ih)
+                st.session_state[base_key] = (l0, t0, wb, hb)
+            else:
+                l0, t0, wb, hb = st.session_state[base_key]
 
+            # UI state
             z_key, sx_key, sy_key = f"zoom_{idx}", f"sx_{idx}", f"sy_{idx}"
-            st.session_state.setdefault(z_key, 0)
-            st.session_state.setdefault(sx_key, 0)
-            st.session_state.setdefault(sy_key, 0)
+            st.session_state.setdefault(z_key, 0)   # zoom delta in %
+            st.session_state.setdefault(sx_key, 0)  # width offset
+            st.session_state.setdefault(sy_key, 0)  # height offset
 
-            zoom = 1 + st.session_state[z_key] / 100
+            # Compute crop window from persisted base + UI
+            zd = st.session_state[z_key]
+            sx = st.session_state[sx_key]
+            sy = st.session_state[sy_key]
+
+            zoom = 1 + zd / 100
             wz, hz = int(wb / zoom), int(hb / zoom)
             cx, cy = l0 + wb // 2, t0 + hb // 2
+
+            # Bounds for sliders (for info/limits)
             min_x, max_x = -cx + wz // 2, iw - (cx + wz // 2)
             min_y, max_y = -cy + hz // 2, ih - (cy + hz // 2)
 
-            sx, sy, zd = st.session_state[sx_key], st.session_state[sy_key], st.session_state[z_key]
-
-            # ✅ Apply clamping for preview (matching export logic)
-            wz, hz = int(wb / zoom), int(hb / zoom)
-            cx, cy = l0 + wb // 2, t0 + hb // 2
-            l2 = max(0, min(cx - wz // 2 + sx, iw - wz))
-            t2 = max(0, min(cy - hz // 2 + sy, ih - hz))
+            # Preview (clamped exactly like export)
+            l2, t2 = clamp_crop_from_center(cx, cy, wz, hz, iw, ih, sx, sy)
             prev = img.crop((l2, t2, l2 + wz, t2 + hz)).resize((cw, ch))
             st.image(prev, caption=f"Preview {cw}×{ch}", use_container_width=True)
 
+            # Height offset
             colh1, colh2 = st.columns([3, 1])
             if min_y != max_y:
                 with colh1:
@@ -173,6 +228,7 @@ if custom_sizes:
                     sy = st.number_input("Height", min_y, max_y, sy, 1, key=f"synum_{idx}", label_visibility="collapsed")
             st.session_state[sy_key] = sy if min_y != max_y else 0
 
+            # Width offset
             colw1, colw2 = st.columns([3, 1])
             if min_x != max_x:
                 with colw1:
@@ -181,6 +237,7 @@ if custom_sizes:
                     sx = st.number_input("Width", min_x, max_x, sx, 1, key=f"sxnum_{idx}", label_visibility="collapsed")
             st.session_state[sx_key] = sx if min_x != max_x else 0
 
+            # Zoom last (±10%)
             colz1, colz2 = st.columns([3, 1])
             with colz1:
                 zd = st.slider("Zoom ±10%", -10, 10, zd, 1, key=f"zslider_{idx}")
@@ -188,13 +245,15 @@ if custom_sizes:
                 zd = st.number_input("Zoom%", -10, 10, zd, 1, key=f"znum_{idx}", label_visibility="collapsed")
             st.session_state[z_key] = zd
 
-            shifts[(cw, ch)] = (sx, sy, 1 + zd / 100)
+            # Persist for export
+            shifts[(cw, ch)] = (st.session_state[sx_key], st.session_state[sy_key], 1 + st.session_state[z_key] / 100)
 
 # ——————————————————————————————————————————————————————————
-# Generate ZIP (JPEG with ICC)
+# Generate ZIP (JPEG with ICC); uses the SAME persisted base windows
 # ——————————————————————————————————————————————————————————
 zip_buf = BytesIO()
 with zipfile.ZipFile(zip_buf, "w") as zf:
+    # Guideline crops (no face-aware by design)
     for rec in guidelines:
         ow = int(rec["frame"]["w"] * rec["effectivePpi"]["x"] / 72)
         oh = int(rec["frame"]["h"] * rec["effectivePpi"]["y"] / 72)
@@ -208,14 +267,24 @@ with zipfile.ZipFile(zip_buf, "w") as zf:
         tmp.seek(0)
         zf.writestr(f"Guidelines/{rec['template']}_{ow}x{oh}.jpg", tmp.getvalue())
 
+    # Custom crops (FaceAware + WYSIWYG)
     for cw, ch in custom_sizes:
-        base = min(records, key=lambda r: abs((cw / ch) - r["frame"]["w"] / r["frame"]["h"]))
-        l, t, wb, hb = auto_custom_start(base, iw, ih, cw, ch)
+        base_key = f"base_{cw}x{ch}"
+        if base_key in st.session_state:
+            l0, t0, wb, hb = st.session_state[base_key]
+        else:
+            # Fallback (first-time compute matches preview logic)
+            base = min(records, key=lambda r: abs((cw / ch) - r["frame"]["w"] / r["frame"]["h"]))
+            l0, t0, wb, hb = auto_custom_start(base, iw, ih, cw, ch)
+            chosen_face = choose_face_for_window(faces, l0, t0, wb, hb)
+            l0, t0, wb, hb = adjust_crop_to_include_face(l0, t0, wb, hb, chosen_face, iw, ih)
+
         sx, sy, zoom = shifts.get((cw, ch), (0, 0, 1))
         wz, hz = int(wb / zoom), int(hb / zoom)
-        cx, cy = l + wb // 2, t + hb // 2
-        l2, t2 = clamp_crop(cx, cy, wz, hz, iw, ih, sx, sy)
+        cx, cy = l0 + wb // 2, t0 + hb // 2
+        l2, t2 = clamp_crop_from_center(cx, cy, wz, hz, iw, ih, sx, sy)
         ccrop = img.crop((l2, t2, l2 + wz, t2 + hz)).resize((cw, ch))
+
         tmp = BytesIO()
         save_kwargs = {"quality": 95, "subsampling": 0}
         if icc_profile:
