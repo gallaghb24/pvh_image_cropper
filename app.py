@@ -143,7 +143,6 @@ if custom_sizes:
         with tab:
             base = min(records, key=lambda r: abs((cw / ch) - r["frame"]["w"] / r["frame"]["h"]))
             l0, t0, wb, hb = auto_custom_start(base, iw, ih, cw, ch)
-            l0, t0, wb, hb = adjust_crop_to_include_face(l0, t0, wb, hb, face_box, iw, ih)
 
             z_key, sx_key, sy_key = f"zoom_{idx}", f"sx_{idx}", f"sy_{idx}"
             st.session_state.setdefault(z_key, 0)
