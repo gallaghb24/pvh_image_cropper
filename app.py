@@ -161,7 +161,7 @@ if custom_sizes:
             # ✅ Apply clamping for preview
             l2, t2 = clamp_crop(cx, cy, wz, hz, iw, ih, sx, sy)
             prev = img.crop((l2, t2, l2 + wz, t2 + hz)).resize((cw, ch))
-            st.image(prev, caption=f"Preview {cw}×{ch}", use_column_width=True)
+            st.image(prev, caption=f"Preview {cw}×{ch}", use_container_width=True)
 
             colh1, colh2 = st.columns([3, 1])
             if min_y != max_y:
