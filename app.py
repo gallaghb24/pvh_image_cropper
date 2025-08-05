@@ -249,7 +249,7 @@ if custom_sizes:
     st.subheader("Adjust Custom Crops")
     tabs = st.tabs([f"{w}×{h}" for w, h in custom_sizes])
 
-    for ((cw, ch), tab) in zip(custom_sizes, tabs)):
+    for ((cw, ch), tab) in zip(custom_sizes, tabs):
         key_root = f"{cw}x{ch}"
         base_key = f"base_{key_root}"
         fa_key   = f"face_{key_root}"
