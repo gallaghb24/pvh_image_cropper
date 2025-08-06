@@ -7,6 +7,8 @@ from typing import List, Tuple
 import cv2
 import numpy as np
 import math
+import re, os
+from pathlib import Path
 
 # ——————————————————————————————————————————————————————————
 # Canonical guideline categories (width / height aspect ratios)
@@ -175,18 +177,101 @@ with st.sidebar.expander("⚙️ Custom Crops", expanded=True):
     custom_sizes: List[Tuple[int, int]] = [(int(r.Width_px), int(r.Height_px)) for r in df_editor.itertuples() if pd.notna(r.Width_px) and pd.notna(r.Height_px)]
 
 # ——————————————————————————————————————————————————————————
-# Load matching guideline records
+# Load & match JSON → records (robust filename matching)
 # ——————————————————————————————————————————————————————————
+DPI_TOKENS = {"72", "96", "144", "150", "300", "350", "400", "450", "600"}
+COLOR_TOKENS = {"rgb", "cmyk", "srgb", "gracol", "adobergb", "eci", "coated", "uncoated"}
+
+def normalize_name(s: str) -> str:
+    """lowercase, strip extension, collapse non-alnum to underscores."""
+    stem = Path(s).stem.lower()
+    return re.sub(r"[^a-z0-9]+", "_", stem).strip("_")
+
+def extract_job_code(s: str):
+    """
+    Heuristic: use the last 4–8 digit block that appears BEFORE a color token (rgb/cmyk) if present.
+    Falls back to the last 4–8 digit block anywhere. Ignores common DPI values.
+    """
+    n = normalize_name(s)
+    m = re.search(r"(\d{4,8})(?=_(?:rgb|cmyk)\b)", n)
+    if m and m.group(1) not in DPI_TOKENS:
+        return m.group(1)
+    ms = list(re.finditer(r"\d{4,8}", n))
+    for match in reversed(ms):
+        code = match.group(0)
+        if code not in DPI_TOKENS:
+            return code
+    return None
+
+def best_spec_for_filename(all_specs: list[str], upload_name: str):
+    """
+    Return (best_spec, candidates) where best_spec is the chosen spec string from JSON,
+    and candidates are all reasonably matching specs (for UI disambiguation).
+    """
+    u_norm = normalize_name(upload_name)
+    u_code = extract_job_code(upload_name)
+
+    # 1) Exact / startswith quick paths
+    exact = [s for s in all_specs if Path(s).name == Path(upload_name).name]
+    if exact:
+        return exact[0], exact
+
+    starts = [s for s in all_specs if u_norm.startswith(normalize_name(s))]
+    if starts:
+        starts.sort(key=lambda s: len(os.path.commonprefix([u_norm, normalize_name(s)])), reverse=True)
+        return starts[0], starts
+
+    # 2) Code-based filter
+    candidates = []
+    if u_code:
+        for s in all_specs:
+            s_norm = normalize_name(s)
+            if u_code in s_norm:
+                candidates.append(s)
+
+    # 3) Score by common prefix length
+    def score(spec: str) -> int:
+        a = normalize_name(spec)
+        b = u_norm
+        return len(os.path.commonprefix([a, b]))
+
+    if candidates:
+        candidates.sort(key=score, reverse=True)
+        return candidates[0], candidates
+
+    # 4) Fallback: highest common prefix across all specs
+    scored = sorted(all_specs, key=score, reverse=True)
+    top = scored[0] if scored else None
+    if top and score(top) >= 6:
+        top_score = score(top)
+        near = [s for s in scored if score(s) >= max(6, top_score - 2)]
+        return top, near
+    return None, []
+
 records: List[dict] = []
 if json_file and image_file:
     data = json.load(json_file)
-    fname = image_file.name
-    for rec in data:
-        spec = rec.get("filename") or rec.get("fileName") or rec.get("asset")
-        if spec and (fname == spec or fname.startswith(spec)):
-            records.append(rec)
+
+    def spec_of(rec: dict) -> str | None:
+        return rec.get("filename") or rec.get("fileName") or rec.get("asset")
+
+    specs = [s for s in (spec_of(r) for r in data) if s]
+
+    best, cands = best_spec_for_filename(specs, image_file.name)
+
+    if cands and len(set(cands)) > 1:
+        st.sidebar.info("Multiple guideline candidates matched this file.")
+        options = sorted(set(cands))
+        default_idx = options.index(best) if best in options else 0
+        pick = st.sidebar.selectbox("Choose the guideline set to use", options=options, index=default_idx)
+        best = pick
+
+    if best:
+        records = [rec for rec in data if spec_of(rec) == best]
+    else:
+        st.sidebar.error("No matching asset name found in JSON for this file. Check naming or add a rule.")
 else:
-    st.info("Upload JSON and image to begin.")
+    st.sidebar.info("Upload JSON and image to begin.")
 
 if not records:
     st.stop()
